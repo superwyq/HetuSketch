@@ -87,12 +87,19 @@ Object.defineProperty(window, 'hetuSketch', {
     index: {
       rebuild: async () => ({ scannedFiles: 0, indexedEntries: 0, indexedProjects: 0, removedFiles: 0, errors: [] })
     },
+    system: {
+      fonts: async () => []
+    },
     desktop: {
       toggleFloating: async () => ({ visible: true, pinned: true }),
       showFloating: async () => ({ visible: true, pinned: true }),
       hideFloating: async () => ({ visible: false, pinned: true }),
       setFloatingPinned: async (pinned: boolean) => ({ visible: true, pinned }),
-      setMainPinned: async (pinned: boolean) => ({ pinned })
+      setMainPinned: async (pinned: boolean) => ({ pinned }),
+      minimize: async () => undefined,
+      maximize: async () => ({ maximized: true }),
+      close: async () => undefined,
+      openWindow: async () => undefined
     }
   },
   writable: true

@@ -12,6 +12,8 @@ export const ENTRY_DIR_BY_TYPE: Record<EntryType, string> = {
 export interface StoragePaths {
   dataRoot: string;
   projectsRoot: string;
+  settingSetsRoot: string;
+  booksRoot: string;
   indexDbPath: string;
 }
 
@@ -21,12 +23,18 @@ export function getStoragePaths(baseDataPath = app.getPath('userData')): Storage
   return {
     dataRoot,
     projectsRoot: join(dataRoot, 'projects'),
+    settingSetsRoot: join(dataRoot, 'setting-sets'),
+    booksRoot: join(dataRoot, 'books'),
     indexDbPath: join(dataRoot, 'hetusketch-index.sqlite')
   };
 }
 
 export async function ensureStorageDirectories(paths: StoragePaths): Promise<void> {
-  await mkdir(paths.projectsRoot, { recursive: true });
+  await Promise.all([
+    mkdir(paths.projectsRoot, { recursive: true }),
+    mkdir(paths.settingSetsRoot, { recursive: true }),
+    mkdir(paths.booksRoot, { recursive: true })
+  ]);
 }
 
 export function getProjectRoot(paths: StoragePaths, projectId: string): string {
@@ -36,6 +44,34 @@ export function getProjectRoot(paths: StoragePaths, projectId: string): string {
 
 export function getProjectManifestPath(paths: StoragePaths, projectId: string): string {
   return join(getProjectRoot(paths, projectId), 'project.json');
+}
+
+export function getSettingSetRoot(paths: StoragePaths, settingSetId: string): string {
+  assertSafeSegment(settingSetId, 'settingSetId');
+  return join(paths.settingSetsRoot, settingSetId);
+}
+
+export function getSettingSetManifestPath(paths: StoragePaths, settingSetId: string): string {
+  return join(getSettingSetRoot(paths, settingSetId), 'setting-set.json');
+}
+
+export function getBookRoot(paths: StoragePaths, bookId: string): string {
+  assertSafeSegment(bookId, 'bookId');
+  return join(paths.booksRoot, bookId);
+}
+
+export function getBookManifestPath(paths: StoragePaths, bookId: string): string {
+  return join(getBookRoot(paths, bookId), 'book.json');
+}
+
+export function getVolumeFilePath(paths: StoragePaths, bookId: string, volumeId: string): string {
+  assertSafeSegment(volumeId, 'volumeId');
+  return join(getBookRoot(paths, bookId), 'volumes', `${volumeId}.json`);
+}
+
+export function getChapterFilePath(paths: StoragePaths, bookId: string, chapterId: string): string {
+  assertSafeSegment(chapterId, 'chapterId');
+  return join(getBookRoot(paths, bookId), 'chapters', `${chapterId}.md`);
 }
 
 export function getEntryDirectory(paths: StoragePaths, projectId: string, type: EntryType): string {

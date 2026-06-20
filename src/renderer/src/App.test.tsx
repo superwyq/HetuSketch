@@ -14,8 +14,8 @@ describe('App shell', () => {
       </ConfigProvider>
     );
 
-    expect(screen.getByText('HetuSketch')).toBeInTheDocument();
-    expect(screen.getByText('总览')).toBeInTheDocument();
+    expect(screen.getAllByText('设置').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('总览').length).toBeGreaterThan(0);
     expect(screen.getByPlaceholderText('搜索角色、世界观规则、伏笔线索...')).toBeInTheDocument();
   });
 });

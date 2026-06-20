@@ -10,8 +10,18 @@ import type {
   AiValidationRequest,
   AiValidationResult,
   AiAgentResponse,
+  BookBindingResult,
+  BookCreateInput,
+  BookManifest,
+  BookTree,
+  BookUpdateInput,
   CharacterEntry,
+  ChapterCreateInput,
+  ChapterMoveInput,
+  ChapterNode,
+  ChapterUpdateInput,
   DashboardStats,
+  DeleteSettingSetStrategy,
   EntryCreateInput,
   EntryListQuery,
   EntrySaveInput,
@@ -36,15 +46,24 @@ import type {
   SearchResultItem,
   SettingCompletionRequest,
   SettingCompletionResult,
+  SettingSetCreateInput,
+  SettingSetManifest,
+  SettingSetUpdateInput,
   ValidationFinding,
+  VolumeCreateInput,
+  VolumeNode,
+  VolumeUpdateInput,
   ValidationRequest,
   ValidationResult,
   WorldEntry
 } from '../../shared/storageTypes.js';
 import { AiService, type AiServiceOptions } from './aiService.js';
+import { BookService } from './bookService.js';
+import { ChapterService } from './chapterService.js';
 import { IndexDatabase } from './indexDatabase.js';
 import { IndexService } from './indexService.js';
 import { getFileStats, ProjectFileStore } from './projectFileStore.js';
+import { SettingSetService } from './settingSetService.js';
 import {
   ensureStorageDirectories,
   getProjectManifestPath,
@@ -59,6 +78,9 @@ export class StorageService {
   private readonly indexDb: IndexDatabase;
   private readonly indexService: IndexService;
   private readonly aiService: AiService;
+  private readonly settingSetService: SettingSetService;
+  private readonly bookService: BookService;
+  private readonly chapterService: ChapterService;
 
   constructor(baseDataPath?: string, aiOptions?: AiServiceOptions) {
     this.paths = getStoragePaths(baseDataPath);
@@ -66,6 +88,9 @@ export class StorageService {
     this.indexDb = new IndexDatabase(this.paths.indexDbPath);
     this.indexService = new IndexService(this.paths, this.fileStore, this.indexDb);
     this.aiService = new AiService(this.indexDb, this.fileStore, aiOptions);
+    this.settingSetService = new SettingSetService(this.paths);
+    this.bookService = new BookService(this.paths);
+    this.chapterService = new ChapterService(this.bookService, this.paths);
   }
 
   async initialize(options: { watch?: boolean } = {}): Promise<IndexSyncSummary> {
@@ -82,6 +107,78 @@ export class StorageService {
   async close(): Promise<void> {
     await this.indexService.stopWatching();
     this.indexDb.close();
+  }
+
+  listSettingSets(): Promise<SettingSetManifest[]> {
+    return this.settingSetService.list();
+  }
+
+  getSettingSet(id: string): Promise<SettingSetManifest> {
+    return this.settingSetService.get(id);
+  }
+
+  createSettingSet(input: SettingSetCreateInput): Promise<SettingSetManifest> {
+    return this.settingSetService.create(input);
+  }
+
+  updateSettingSet(input: SettingSetUpdateInput): Promise<SettingSetManifest> {
+    return this.settingSetService.update(input);
+  }
+
+  deleteSettingSet(id: string, strategy: DeleteSettingSetStrategy): Promise<void> {
+    return this.settingSetService.delete(id, strategy);
+  }
+
+  listBooks(): Promise<BookManifest[]> {
+    return this.bookService.list();
+  }
+
+  getBook(bookId: string): Promise<BookManifest> {
+    return this.bookService.get(bookId);
+  }
+
+  createBook(input: BookCreateInput): Promise<BookManifest> {
+    return this.bookService.create(input);
+  }
+
+  updateBook(input: BookUpdateInput): Promise<BookManifest> {
+    return this.bookService.update(input);
+  }
+
+  deleteBook(bookId: string): Promise<void> {
+    return this.bookService.delete(bookId);
+  }
+
+  bindBookSettingSet(bookId: string, settingSetId?: string): Promise<BookBindingResult> {
+    return this.bookService.bindSettingSet(bookId, settingSetId);
+  }
+
+  listBookTree(bookId: string): Promise<BookTree> {
+    return this.chapterService.listTree(bookId);
+  }
+
+  createVolume(input: VolumeCreateInput): Promise<VolumeNode> {
+    return this.chapterService.createVolume(input);
+  }
+
+  updateVolume(input: VolumeUpdateInput): Promise<VolumeNode> {
+    return this.chapterService.updateVolume(input);
+  }
+
+  createChapter(input: ChapterCreateInput): Promise<ChapterNode> {
+    return this.chapterService.createChapter(input);
+  }
+
+  updateChapter(input: ChapterUpdateInput): Promise<ChapterNode> {
+    return this.chapterService.updateChapter(input);
+  }
+
+  moveChapter(input: ChapterMoveInput): Promise<BookTree> {
+    return this.chapterService.moveChapter(input);
+  }
+
+  deleteChapter(bookId: string, chapterId: string): Promise<void> {
+    return this.chapterService.deleteChapter(bookId, chapterId);
   }
 
   async createProject(input: ProjectCreateInput): Promise<ProjectManifest> {

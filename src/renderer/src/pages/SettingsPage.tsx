@@ -1,6 +1,6 @@
-import { ApiOutlined, BuildOutlined, PushpinOutlined, ToolOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Form, Input, InputNumber, List, Select, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
-import { useEffect, useState } from 'react';
+import { ApiOutlined, BuildOutlined, FontSizeOutlined, PushpinOutlined, ToolOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, ColorPicker, Form, Input, InputNumber, List, Segmented, Select, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
 import type { AiConfig, AiConfigSaveInput, AiPromptConfig, AiSkillConfig, AiSkillSaveInput, HttpToolConfig, HttpToolSaveInput, VectorIndexState } from '@shared/storageTypes';
 import { useAppStore } from '../store/appStore';
 
@@ -14,6 +14,11 @@ export function SettingsPage(): React.JSX.Element {
   const setThemeMode = useAppStore((state) => state.setThemeMode);
   const mainPinned = useAppStore((state) => state.mainPinned);
   const setMainPinned = useAppStore((state) => state.setMainPinned);
+  const sidebarFont = useAppStore((state) => state.sidebarFont);
+  const editorFont = useAppStore((state) => state.editorFont);
+  const setSidebarFont = useAppStore((state) => state.setSidebarFont);
+  const setEditorFont = useAppStore((state) => state.setEditorFont);
+  const systemFonts = useAppStore((state) => state.systemFonts);
   const selectedProject = useAppStore((state) => state.selectedProject);
   const [aiForm] = Form.useForm<AiConfigSaveInput>();
   const [promptForm] = Form.useForm<AiPromptConfig>();
@@ -24,6 +29,8 @@ export function SettingsPage(): React.JSX.Element {
   const [ragState, setRagState] = useState<VectorIndexState>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const fontOptions = useMemo(() => systemFonts.map((font) => ({ value: font, label: font })), [systemFonts]);
 
   useEffect(() => {
     let disposed = false;
@@ -136,21 +143,78 @@ export function SettingsPage(): React.JSX.Element {
   };
 
   return (
-    <Space direction="vertical" size="large" className="page-stack">
-      <Card className="page-title-card">
-        <Typography.Title level={2}>设置与 AI</Typography.Title>
-        <Typography.Paragraph type="secondary">配置主题、窗口置顶、AI 供应商、RAG 索引、提示词和受控 HTTP 工具。API Key 仅通过安全 IPC 交给主进程保存。</Typography.Paragraph>
-      </Card>
-
+    <Space direction="vertical" size="middle" className="page-stack">
       <Tabs
         items={[
+          {
+            key: 'general',
+            label: <Space><FontSizeOutlined />通用</Space>,
+            children: (
+              <Card loading={loading} title="界面与字体" className="feature-card">
+                <Space direction="vertical" className="full-width" size="middle">
+                  <div>
+                    <Typography.Title level={4}>界面主题</Typography.Title>
+                    <Segmented
+                      value={themeMode}
+                      onChange={(value) => setThemeMode(value as 'light' | 'dark')}
+                      options={[
+                        { value: 'light', label: '浅色' },
+                        { value: 'dark', label: '深色' }
+                      ]}
+                    />
+                    <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
+                      切换后整个工作台会立即应用对应主题风格。
+                    </Typography.Paragraph>
+                  </div>
+                  <div>
+                    <Typography.Title level={4}>功能栏字体</Typography.Title>
+                    <Space wrap size="small">
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        value={sidebarFont.family}
+                        options={fontOptions}
+                        onChange={(value) => setSidebarFont({ ...sidebarFont, family: value })}
+                        placeholder="字体名称"
+                        style={{ width: 220 }}
+                      />
+                      <InputNumber min={10} max={32} value={sidebarFont.size} onChange={(value) => setSidebarFont({ ...sidebarFont, size: value ?? 13 })} />
+                      <ColorPicker value={sidebarFont.color} onChange={(color) => setSidebarFont({ ...sidebarFont, color: color.toHexString() })} showText />
+                    </Space>
+                    <div className="font-preview" style={{ fontFamily: sidebarFont.family, fontSize: sidebarFont.size, color: sidebarFont.color, background: '#241d16', padding: 12, borderRadius: 8, marginTop: 12 }}>
+                      功能栏字体预览 · 目录 · 角色 · 世界观
+                    </div>
+                  </div>
+                  <div>
+                    <Typography.Title level={4}>文本编辑区字体</Typography.Title>
+                    <Space wrap size="small">
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        value={editorFont.family}
+                        options={fontOptions}
+                        onChange={(value) => setEditorFont({ ...editorFont, family: value })}
+                        placeholder="字体名称"
+                        style={{ width: 220 }}
+                      />
+                      <InputNumber min={10} max={48} value={editorFont.size} onChange={(value) => setEditorFont({ ...editorFont, size: value ?? 16 })} />
+                      <ColorPicker value={editorFont.color} onChange={(color) => setEditorFont({ ...editorFont, color: color.toHexString() })} showText />
+                    </Space>
+                    <div className="font-preview" style={{ fontFamily: editorFont.family, fontSize: editorFont.size, color: editorFont.color, background: '#fffaf1', padding: 12, borderRadius: 8, minHeight: 80, marginTop: 12 }}>
+                      文本编辑区字体预览<br />
+                      第一章 · 风起青萍之末
+                    </div>
+                  </div>
+                </Space>
+              </Card>
+            )
+          },
           {
             key: 'appearance',
             label: '应用',
             children: (
-              <Card loading={loading} title="外观与桌面交互" className="feature-card">
+              <Card loading={loading} title="桌面交互" className="feature-card">
                 <Form layout="vertical">
-                  <Form.Item label="深色主题"><Switch checked={themeMode === 'dark'} onChange={(checked) => setThemeMode(checked ? 'dark' : 'light')} /></Form.Item>
                   <Form.Item label="主窗口置顶"><Switch checked={mainPinned} onChange={(checked) => void togglePin(checked)} checkedChildren="置顶" unCheckedChildren="普通" /></Form.Item>
                   <Space wrap>
                     <Button icon={<PushpinOutlined />} onClick={() => void window.hetuSketch.desktop.showFloating()}>显示悬浮速查</Button>

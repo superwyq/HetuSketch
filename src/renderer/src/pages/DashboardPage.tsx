@@ -74,7 +74,7 @@ export function DashboardPage(): React.JSX.Element {
   ];
 
   return (
-    <Space direction="vertical" size="large" className="page-stack">
+    <Space direction="vertical" size="middle" className="page-stack">
       {!guideDismissed && (
         <Alert
           showIcon
@@ -87,14 +87,14 @@ export function DashboardPage(): React.JSX.Element {
 
       <section className="hero-panel">
         <div>
-          <Typography.Text className="eyebrow">Task 7 用户界面与桌面交互</Typography.Text>
+          <Typography.Text className="eyebrow">创作工作台与桌面体验</Typography.Text>
           <Typography.Title>河图速写创作助手</Typography.Title>
           <Typography.Paragraph>
-            面向长篇创作的本地设定库、逻辑监工与 AI 增强控制台。当前作品：{selectedProject?.name ?? '尚未选择'}。
+            围绕“设定集 → 作品 → 数据库 → 创作正文”的结构化创作工作台。当前作品：{selectedProject?.name ?? '尚未选择'}。
           </Typography.Paragraph>
           <Space wrap>
-            <Button type="primary" icon={<BookOutlined />}><Link to="/projects">管理作品</Link></Button>
-            <Button icon={<FileSearchOutlined />}><Link to="/checks">开始校验</Link></Button>
+            <Button type="primary" icon={<BookOutlined />}><Link to="/data/characters">打开角色数据管理</Link></Button>
+            <Button icon={<FileSearchOutlined />}><Link to="/workspace/editor">进入文本编辑器</Link></Button>
             <Button icon={<ThunderboltOutlined />} onClick={() => void window.hetuSketch.desktop.showFloating()}>打开悬浮速查</Button>
           </Space>
         </div>
@@ -102,7 +102,7 @@ export function DashboardPage(): React.JSX.Element {
 
       {error && <Alert type="error" showIcon message="加载失败" description={error} />}
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[12, 12]}>
         {statItems.map((item) => (
           <Col xs={24} sm={12} lg={6} key={item.title}>
             <Card className="metric-card">
@@ -114,7 +114,7 @@ export function DashboardPage(): React.JSX.Element {
         ))}
       </Row>
 
-      <Row gutter={[16, 16]}>
+      <Row gutter={[12, 12]}>
         <Col xs={24} lg={14}>
           <Card
             title="最近访问"

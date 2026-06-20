@@ -14,6 +14,30 @@ const api: HetuSketchApi = {
   dashboard: {
     stats: (projectId?: string) => ipcRenderer.invoke(IPC_CHANNELS.dashboardStats, projectId)
   },
+  settingSets: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.settingSetsList),
+    get: (id) => ipcRenderer.invoke(IPC_CHANNELS.settingSetsGet, id),
+    create: (input) => ipcRenderer.invoke(IPC_CHANNELS.settingSetsCreate, input),
+    update: (input) => ipcRenderer.invoke(IPC_CHANNELS.settingSetsUpdate, input),
+    delete: (id, strategy) => ipcRenderer.invoke(IPC_CHANNELS.settingSetsDelete, id, strategy)
+  },
+  books: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.booksList),
+    get: (bookId) => ipcRenderer.invoke(IPC_CHANNELS.booksGet, bookId),
+    create: (input) => ipcRenderer.invoke(IPC_CHANNELS.booksCreate, input),
+    update: (input) => ipcRenderer.invoke(IPC_CHANNELS.booksUpdate, input),
+    delete: (bookId) => ipcRenderer.invoke(IPC_CHANNELS.booksDelete, bookId),
+    bindSettingSet: (bookId, settingSetId) => ipcRenderer.invoke(IPC_CHANNELS.booksBindSettingSet, bookId, settingSetId)
+  },
+  chapters: {
+    listTree: (bookId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersListTree, bookId),
+    createVolume: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersCreateVolume, input),
+    updateVolume: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersUpdateVolume, input),
+    createChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersCreateChapter, input),
+    updateChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersUpdateChapter, input),
+    moveChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersMoveChapter, input),
+    deleteChapter: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteChapter, bookId, chapterId)
+  },
   projects: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.projectsList),
     get: (projectId: string) => ipcRenderer.invoke(IPC_CHANNELS.projectsGet, projectId),
@@ -58,12 +82,19 @@ const api: HetuSketchApi = {
   index: {
     rebuild: (projectId?: string) => ipcRenderer.invoke(IPC_CHANNELS.indexRebuild, projectId)
   },
+  system: {
+    fonts: () => ipcRenderer.invoke(IPC_CHANNELS.systemFonts)
+  },
   desktop: {
     toggleFloating: () => ipcRenderer.invoke(IPC_CHANNELS.desktopFloatingToggle),
     showFloating: () => ipcRenderer.invoke(IPC_CHANNELS.desktopFloatingShow),
     hideFloating: () => ipcRenderer.invoke(IPC_CHANNELS.desktopFloatingHide),
     setFloatingPinned: (pinned: boolean) => ipcRenderer.invoke(IPC_CHANNELS.desktopFloatingPin, pinned),
-    setMainPinned: (pinned: boolean) => ipcRenderer.invoke(IPC_CHANNELS.desktopMainPin, pinned)
+    setMainPinned: (pinned: boolean) => ipcRenderer.invoke(IPC_CHANNELS.desktopMainPin, pinned),
+    minimize: () => ipcRenderer.invoke(IPC_CHANNELS.desktopWindowMinimize),
+    maximize: () => ipcRenderer.invoke(IPC_CHANNELS.desktopWindowMaximize),
+    close: () => ipcRenderer.invoke(IPC_CHANNELS.desktopWindowClose),
+    openWindow: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.desktopOpenWindow, path)
   }
 };
 

@@ -53,12 +53,7 @@ export function ChecksPage(): React.JSX.Element {
   };
 
   return (
-    <Space direction="vertical" size="large" className="page-stack">
-      <Card className="page-title-card">
-        <Typography.Title level={2}>逻辑校验</Typography.Title>
-        <Typography.Paragraph type="secondary">粘贴正文片段，基于角色红线、世界观硬规则和未回收伏笔执行离线校验；可选 AI 增强只作为建议。</Typography.Paragraph>
-      </Card>
-
+    <Space direction="vertical" size="middle" className="page-stack">
       {!selectedProject && <Alert showIcon type="warning" message="未选择作品" description="请先在作品管理中选择当前作品。" />}
 
       <Card title="待校验文本" className="feature-card">
@@ -77,7 +72,7 @@ export function ChecksPage(): React.JSX.Element {
 
       {result && (
         <Card title="校验结果" className="feature-card">
-          <Space wrap size="large" className="result-stats">
+          <Space wrap size="middle" className="result-stats">
             <Statistic title="状态" value={result.ok ? '通过' : '需复核'} />
             <Statistic title="警告" value={result.summary.warningCount} />
             <Statistic title="伏笔提醒" value={result.summary.reminderCount} />

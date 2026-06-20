@@ -1,13 +1,9 @@
 type MockRow = Record<string, unknown>;
 
-class MockStatement {
-  private db: MockDatabase;
-  private sql: string;
+type MockTable = { columns: string[]; rows: MockRow[] };
 
-  constructor(db: MockDatabase, sql: string) {
-    this.db = db;
-    this.sql = sql;
-  }
+class MockStatement {
+  constructor(private readonly db: MockDatabase, private readonly sql: string) {}
 
   run(...params: unknown[]): { changes: number; lastInsertRowid: number } {
     return this.db.executeRun(this.sql, params);
@@ -22,27 +18,26 @@ class MockStatement {
     return this.db.executeQuery(this.sql, params);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  bind(..._params: unknown[]): this {
+  bind(...params: unknown[]): this {
+    void params;
     return this;
   }
 }
 
 class MockDatabase {
-  private tables: Map<string, { columns: string[]; rows: MockRow[] }> = new Map();
+  private tables: Map<string, MockTable> = new Map();
   private pragmas: Map<string, unknown> = new Map();
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  constructor(_filename: string) {
-    // Initialize standard pragmas
+  constructor(filename: string) {
+    void filename;
     this.pragmas.set('user_version', 0);
     this.pragmas.set('journal_mode', 'wal');
     this.pragmas.set('foreign_keys', 'ON');
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  pragma(key: string, _value?: unknown): unknown {
-    return this.pragmas.get(key);
+  pragma(key: string, value?: unknown): unknown {
+    void value;
+    return this.pragmas.get(key.split('=')[0].trim());
   }
 
   prepare(sql: string): MockStatement {
@@ -50,190 +45,251 @@ class MockDatabase {
   }
 
   exec(sql: string): this {
-    // Handle multi-statement SQL (for migrations/DDL)
-    const statements = sql.split(';').map(s => s.trim()).filter(Boolean);
-    for (const stmt of statements) {
-      this.executeRun(stmt + ';', []);
+    const statements = sql.split(';').map((statement) => statement.trim()).filter(Boolean);
+    for (const statement of statements) {
+      this.executeRun(`${statement};`, []);
     }
     return this;
+  }
+
+  transaction<T>(work: () => T): () => T {
+    return work;
   }
 
   close(): void {
     // mock: no-op
   }
 
-  // ---- Internal mock helpers ----
+  executeRun(sqlInput: string, params: unknown[]): { changes: number; lastInsertRowid: number } {
+    const sql = sqlInput.trim();
+    const upper = sql.toUpperCase();
 
-  executeRun(_sql: string, _params: unknown[]): { changes: number; lastInsertRowid: number } {
-    const sql = _sql.trim().toUpperCase();
-
-    // CREATE TABLE
-    const createMatch = sql.match(/CREATE\s+(?:VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.+)\)/is);
+    const createMatch = sql.match(/CREATE\s+(?:VIRTUAL\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*(?:USING\s+\w+)?\s*\((.+)\)/is);
     if (createMatch) {
-      const tableName = createMatch[1];
-      // Parse column names from the definition
-      const colDefs = createMatch[2].split(',').map(c => c.trim());
-      const columns = colDefs.map(c => c.split(/\s+/)[0].replace(/["`]/g, ''));
+      const tableName = normalizeName(createMatch[1]);
+      const columns = splitColumns(createMatch[2]).map((definition) => normalizeName(definition.split(/\s+/)[0].replace(/["`]/g, '')));
       if (!this.tables.has(tableName)) {
         this.tables.set(tableName, { columns, rows: [] });
       }
       return { changes: 0, lastInsertRowid: 0 };
     }
 
-    // INSERT
-    if (sql.startsWith('INSERT')) {
-      const tableMatch = sql.match(/INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)/i);
-      if (tableMatch) {
-        const tableName = tableMatch[1];
-        const table = this.tables.get(tableName);
-        if (table) {
-          const row: MockRow = {};
-          // Parametrized INSERT: map ? placeholders to params
-          for (const [i, col] of table.columns.entries()) {
-            row[col] = _params[i] ?? null;
-          }
-          // Check UNIQUE constraints on 'id' column
-          if ('id' in row && table.rows.some(r => r.id === row.id)) {
-            const existing = table.rows.find(r => r.id === row.id);
-            if (existing) {
-              Object.assign(existing, row);
-              return { changes: 1, lastInsertRowid: table.rows.indexOf(existing) + 1 };
-            }
-          }
-          table.rows.push(row);
-          return { changes: 1, lastInsertRowid: table.rows.length };
-        }
+    if (upper.startsWith('INSERT')) {
+      const tableMatch = sql.match(/INSERT\s+(?:OR\s+\w+\s+)?INTO\s+(\w+)\s*\(([^)]+)\)/i);
+      if (!tableMatch) return { changes: 1, lastInsertRowid: 1 };
+      const tableName = normalizeName(tableMatch[1]);
+      const table = this.ensureTable(tableName);
+      const columns = tableMatch[2].split(',').map((column) => normalizeName(column.trim()));
+      const paramObject = isRecord(params[0]) ? params[0] : undefined;
+      const row: MockRow = {};
+
+      columns.forEach((column, index) => {
+        row[column] = paramObject ? pickParam(paramObject, column) : params[index] ?? null;
+      });
+
+      for (const column of table.columns) {
+        if (!(column in row)) row[column] = null;
       }
-      return { changes: 1, lastInsertRowid: 1 };
+
+      const existing = row.id !== undefined ? table.rows.find((item) => item.id === row.id) : undefined;
+      if (existing) {
+        Object.assign(existing, row);
+        return { changes: 1, lastInsertRowid: table.rows.indexOf(existing) + 1 };
+      }
+
+      table.rows.push(row);
+      return { changes: 1, lastInsertRowid: table.rows.length };
     }
 
-    // UPDATE
-    if (sql.startsWith('UPDATE')) {
+    if (upper.startsWith('UPDATE')) {
       const tableMatch = sql.match(/UPDATE\s+(\w+)/i);
-      if (tableMatch) {
-        const table = this.tables.get(tableMatch[1]);
-        if (table && table.rows.length > 0) {
-          // Simply update the first row for mock purposes
-          const row = table.rows[0];
-          // Map set clause to params
-          const setMatch = sql.match(/SET\s+(.+?)(?:\s+WHERE|$)/i);
-          if (setMatch) {
-            const setCols = setMatch[1].split(',').map(s => s.trim());
-            for (const [i, sc] of setCols.entries()) {
-              const colMatch = sc.match(/^(\w+)\s*=/);
-              if (colMatch) {
-                row[colMatch[1]] = _params[i] ?? null;
-              }
-            }
-          }
-          return { changes: 1, lastInsertRowid: 0 };
-        }
+      const setMatch = sql.match(/SET\s+(.+?)(?:\s+WHERE|$)/is);
+      if (!tableMatch || !setMatch) return { changes: 0, lastInsertRowid: 0 };
+      const table = this.tables.get(normalizeName(tableMatch[1]));
+      if (!table) return { changes: 0, lastInsertRowid: 0 };
+      const rows = filterRows(table.rows, sql, params);
+      const paramObject = isRecord(params[0]) ? params[0] : undefined;
+      const assignments = setMatch[1].split(',').map((part) => part.trim());
+      for (const row of rows) {
+        assignments.forEach((assignment, index) => {
+          const colMatch = assignment.match(/^(\w+)\s*=/);
+          if (!colMatch) return;
+          const column = normalizeName(colMatch[1]);
+          row[column] = paramObject ? pickParam(paramObject, column) : params[index] ?? null;
+        });
       }
-      return { changes: 0, lastInsertRowid: 0 };
+      return { changes: rows.length, lastInsertRowid: 0 };
     }
 
-    // DELETE
-    if (sql.startsWith('DELETE')) {
+    if (upper.startsWith('DELETE')) {
       const tableMatch = sql.match(/DELETE\s+FROM\s+(\w+)/i);
-      if (tableMatch) {
-        const table = this.tables.get(tableMatch[1]);
-        if (table) {
-          const len = table.rows.length;
-          table.rows = [];
-          return { changes: len, lastInsertRowid: 0 };
-        }
+      if (!tableMatch) return { changes: 0, lastInsertRowid: 0 };
+      const table = this.tables.get(normalizeName(tableMatch[1]));
+      if (!table) return { changes: 0, lastInsertRowid: 0 };
+      const before = table.rows.length;
+      if (!upper.includes('WHERE')) {
+        table.rows = [];
+      } else {
+        const toDelete = new Set(filterRows(table.rows, sql, params));
+        table.rows = table.rows.filter((row) => !toDelete.has(row));
       }
-      return { changes: 0, lastInsertRowid: 0 };
+      return { changes: before - table.rows.length, lastInsertRowid: 0 };
     }
 
-    // DROP TABLE
-    if (sql.startsWith('DROP')) {
+    if (upper.startsWith('DROP')) {
       const tableMatch = sql.match(/DROP\s+TABLE\s+IF\s+EXISTS\s+(\w+)/i);
-      if (tableMatch) {
-        this.tables.delete(tableMatch[1]);
-      }
+      if (tableMatch) this.tables.delete(normalizeName(tableMatch[1]));
       return { changes: 0, lastInsertRowid: 0 };
     }
 
     return { changes: 0, lastInsertRowid: 0 };
   }
 
-  executeQuery(_sql: string, _params: unknown[]): MockRow[] {
-    const sql = _sql.trim().toUpperCase();
+  executeQuery(sqlInput: string, params: unknown[]): MockRow[] {
+    const sql = sqlInput.trim();
+    const upper = sql.toUpperCase();
 
-    // SELECT
-    if (sql.startsWith('SELECT') || sql.startsWith('WITH')) {
-      // Try to match table name from FROM clause
-      const fromMatch = sql.match(/FROM\s+(\w+)/i);
-      if (fromMatch) {
-        const table = this.tables.get(fromMatch[1]);
-        if (table) {
-          // WHERE clause filtering
-          if (sql.includes('WHERE')) {
-            const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|\s*$)/i);
-            if (whereMatch) {
-              const condition = whereMatch[1].trim();
-              // Simple equality filter: col = ?
-              const eqMatch = condition.match(/(\w+)\s*=\s*\?/);
-              if (eqMatch) {
-                const col = eqMatch[1];
-                const val = _params[0];
-                return table.rows.filter(r => String(r[col]) === String(val));
-              }
-              // IN filter with FTS5 match
-              if (condition.includes('IN') && condition.includes('search_index')) {
-                const ftsTable = this.tables.get('search_index');
-                if (ftsTable) {
-                  // Return rows from the main table based on FTS5 match
-                  const searchTerm = _params[0] as string;
-                  const ftsMatches = ftsTable.rows.filter(r => 
-                    Object.values(r).some(v => String(v).toLowerCase().includes(String(searchTerm).toLowerCase()))
-                  );
-                  const matchedIds = ftsMatches.map(r => r.id);
-                  return table.rows.filter(r => matchedIds.includes(r.id));
-                }
-              }
-              // GLOB pattern for LIKE
-              const likeMatch = condition.match(/(\w+)\s+(?:NOT\s+)?LIKE\s+\?/i);
-              if (likeMatch) {
-                const col = likeMatch[1];
-                const pattern = String(_params[0]);
-                const regex = new RegExp(pattern.replace(/_/g, '.').replace(/%/g, '.*'), 'i');
-                return table.rows.filter(r => regex.test(String(r[col])));
-              }
-              // Simple count with condition
-              if (condition.includes('COUNT(')) {
-                const countCol = condition.match(/COUNT\(\*\)\s*=\s*(\d+)/);
-                if (countCol) {
-                  const expected = parseInt(countCol[1], 10);
-                  return table.rows.length > 0 === (expected > 0) ? table.rows : [];
-                }
-              }
-            }
-          }
+    if (!upper.startsWith('SELECT') && !upper.startsWith('WITH')) return [];
 
-          // Handle aggregate functions
-          if (sql.includes('COUNT(')) {
-            const countAlias = sql.match(/COUNT\([^)]+\)\s+(?:as\s+)?(\w+)/i);
-            if (countAlias || sql.includes('COUNT')) {
-              const alias = countAlias?.[1] ?? 'count';
-              return [{ [alias]: table.rows.length }];
-            }
-          }
-
-          // LIMIT
-          const limitMatch = sql.match(/LIMIT\s+(\d+)/i);
-          if (limitMatch) {
-            return table.rows.slice(0, parseInt(limitMatch[1], 10));
-          }
-
-          return [...table.rows];
-        }
-      }
+    if (upper.includes('FROM RECENT_ACCESS') && upper.includes('JOIN ENTRIES')) {
+      const recent = this.tables.get('recent_access')?.rows ?? [];
+      const entries = this.tables.get('entries')?.rows ?? [];
+      return filterRows(recent, sql, params).map((access) => {
+        const entry = entries.find((item) => item.project_id === access.project_id && item.id === access.entry_id) ?? {};
+        return { ...entry, excerpt: entry.summary, accessed_at: access.accessed_at };
+      });
     }
 
-    return [];
+    const fromMatch = sql.match(/FROM\s+(\w+)/i);
+    if (!fromMatch) return [];
+    const tableName = normalizeName(fromMatch[1]);
+    const table = this.tables.get(tableName);
+    if (!table) return aggregateEmpty(sql);
+
+    let rows = filterRows(table.rows, sql, params);
+
+    if (tableName === 'search_index' && upper.includes('MATCH')) {
+      const keyword = normalizeSearch(String(pickParamObject(params)?.keyword ?? params[0] ?? ''));
+      rows = rows.filter((row) => searchableRow(row).includes(keyword));
+    }
+
+    if (upper.includes('GROUP BY TYPE')) {
+      const grouped = new Map<string, number>();
+      for (const row of rows) grouped.set(String(row.type), (grouped.get(String(row.type)) ?? 0) + 1);
+      return Array.from(grouped, ([type, count]) => ({ type, count }));
+    }
+
+    if (upper.includes('COUNT(')) {
+      const alias = sql.match(/COUNT\([^)]+\)\s+(?:AS\s+)?(\w+)/i)?.[1] ?? 'count';
+      return [{ [normalizeName(alias)]: rows.length }];
+    }
+
+    if (upper.includes('MAX(UPDATED_AT)')) {
+      const latest = rows.map((row) => String(row.updated_at ?? '')).sort().at(-1);
+      return [{ updatedAt: latest }];
+    }
+
+    if (upper.includes('ORDER BY UPDATED_AT DESC')) {
+      rows = [...rows].sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')));
+    }
+
+    const limit = Number(pickParamObject(params)?.limit ?? sql.match(/LIMIT\s+(\d+)/i)?.[1] ?? rows.length);
+    return rows.slice(0, limit).map((row) => projectSelectedColumns(row, sql));
   }
+
+  private ensureTable(name: string): MockTable {
+    const table = this.tables.get(name);
+    if (table) return table;
+    const created: MockTable = { columns: [], rows: [] };
+    this.tables.set(name, created);
+    return created;
+  }
+}
+
+function filterRows(rows: MockRow[], sql: string, params: unknown[]): MockRow[] {
+  const paramObject = pickParamObject(params);
+  const whereMatch = sql.match(/WHERE\s+(.+?)(?:\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/is);
+  if (!whereMatch) return [...rows];
+  const where = whereMatch[1];
+
+  return rows.filter((row) => {
+    const equalityMatches = [...where.matchAll(/(\w+)\s*=\s*(?:@?(\w+)|\?)/g)];
+    for (let index = 0; index < equalityMatches.length; index += 1) {
+      const [, columnRaw, paramName] = equalityMatches[index];
+      const column = normalizeName(columnRaw);
+      const value = paramName ? pickParam(paramObject ?? {}, paramName) : params[index];
+      if (value !== null && value !== undefined && String(row[column]) !== String(value)) return false;
+    }
+
+    if (where.includes('@projectId IS NULL') && paramObject?.projectId) {
+      return String(row.project_id) === String(paramObject.projectId);
+    }
+
+    if (where.includes('@type IS NULL') && paramObject?.type) {
+      return String(row.type) === String(paramObject.type);
+    }
+
+    if (where.includes('@todayStart')) {
+      return String(row.updated_at ?? '') >= String(paramObject?.todayStart ?? '');
+    }
+
+    return true;
+  });
+}
+
+function projectSelectedColumns(row: MockRow, sql: string): MockRow {
+  if (!sql.toUpperCase().startsWith('SELECT *')) return { ...row };
+  return { ...row };
+}
+
+function aggregateEmpty(sql: string): MockRow[] {
+  if (sql.toUpperCase().includes('COUNT(')) return [{ count: 0 }];
+  return [];
+}
+
+function splitColumns(input: string): string[] {
+  const columns: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const char of input) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      columns.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) columns.push(current.trim());
+  return columns.filter((column) => !/^(PRIMARY|FOREIGN|UNIQUE|CHECK)\b/i.test(column));
+}
+
+function normalizeName(name: string): string {
+  return name.replace(/["`]/g, '').trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function pickParamObject(params: unknown[]): Record<string, unknown> | undefined {
+  return isRecord(params[0]) ? params[0] : undefined;
+}
+
+function pickParam(params: Record<string, unknown>, column: string): unknown {
+  if (column in params) return params[column];
+  const camel = column.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
+  if (camel in params) return params[camel];
+  return undefined;
+}
+
+function normalizeSearch(value: string): string {
+  return value.replace(/["*]/g, '').toLowerCase();
+}
+
+function searchableRow(row: MockRow): string {
+  return Object.values(row).map((value) => String(value ?? '').toLowerCase()).join(' ');
 }
 
 const Database = MockDatabase as unknown as new (filename: string) => MockDatabase;

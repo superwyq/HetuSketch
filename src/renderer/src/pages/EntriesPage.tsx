@@ -1,7 +1,9 @@
-import { CheckCircleOutlined, DeleteOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Form, Input, List, Popconfirm, Select, Space, Tag, Typography, message } from 'antd';
+import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import { Alert, Avatar, Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Switch, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import type { EntryCreateInput, EntryRelation, EntryType, PlotStatus, ProjectEntry } from '@shared/storageTypes';
+import { RelationshipCanvas } from '../components/RelationshipCanvas';
 import { useAppStore } from '../store/appStore';
 
 interface EntriesPageProps {
@@ -34,16 +36,31 @@ const plotStatusOptions = [
 
 export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const [form] = Form.useForm<EntryCreateInput>();
+  const location = useLocation();
   const selectedProject = useAppStore((state) => state.selectedProject);
+  const sidebarKeyword = useAppStore((state) => state.searchKeyword);
+  const refreshSidebar = useAppStore((state) => state.refreshSidebar);
   const [items, setItems] = useState<ProjectEntry[]>([]);
   const [activeEntry, setActiveEntry] = useState<ProjectEntry>();
   const [editingEntry, setEditingEntry] = useState<ProjectEntry>();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<'cards' | 'list' | 'graph'>('cards');
+  const [characterRoleFilter, setCharacterRoleFilter] = useState('all');
+  const [relationTargetId, setRelationTargetId] = useState<string>();
+  const [relationLabel, setRelationLabel] = useState('');
+  const [reverseRelationLabel, setReverseRelationLabel] = useState('');
+  const [relationBidirectional, setRelationBidirectional] = useState(true);
   const [worldCategoryFilter, setWorldCategoryFilter] = useState('all');
   const [plotStatusFilter, setPlotStatusFilter] = useState<PlotStatus | 'all'>('all');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const meta = pageMeta[type];
+  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const roleQuery = query.get('role') ?? 'all';
+  const categoryQuery = query.get('category') ?? 'all';
+  const statusQuery = (query.get('status') as PlotStatus | null) ?? 'all';
+  const entryQuery = query.get('entry');
 
   const loadItems = useCallback(async (): Promise<void> => {
     if (!selectedProject) {
@@ -95,7 +112,9 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
         message.success('设定条目已保存');
       }
       form.resetFields();
+      setCreateOpen(false);
       await loadItems();
+      refreshSidebar();
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : '保存失败');
     } finally {
@@ -106,6 +125,7 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const editEntry = (entry: ProjectEntry): void => {
     setEditingEntry(entry);
     setActiveEntry(entry);
+    setCreateOpen(true);
     form.setFieldsValue(entryToForm(entry) as Partial<EntryCreateInput>);
   };
 
@@ -124,6 +144,7 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
     }
     message.success('条目已删除');
     await loadItems();
+    refreshSidebar();
   };
 
   const markResolved = async (entry: ProjectEntry): Promise<void> => {
@@ -160,29 +181,74 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
     }
   };
 
+  useEffect(() => {
+    if (!entryQuery) return;
+    const nextActive = items.find((entry) => entry.id === entryQuery);
+    if (nextActive) setActiveEntry(nextActive);
+  }, [entryQuery, items]);
+
   const filteredItems = useMemo(() => items.filter((entry) => {
-    if (type === 'world' && worldCategoryFilter !== 'all') {
-      return entry.type === 'world' && entry.category === worldCategoryFilter;
+    const keyword = sidebarKeyword.trim().toLowerCase();
+    if (keyword && !`${entry.title} ${entry.summary ?? ''} ${entry.content} ${entry.tags.join(' ')}`.toLowerCase().includes(keyword)) {
+      return false;
     }
-    if (type === 'plot' && plotStatusFilter !== 'all') {
-      return entry.type === 'plot' && entry.status === plotStatusFilter;
+    const roleFilter = roleQuery !== 'all' ? roleQuery : characterRoleFilter;
+    const categoryFilter = categoryQuery !== 'all' ? categoryQuery : worldCategoryFilter;
+    const statusFilter = statusQuery !== 'all' ? statusQuery : plotStatusFilter;
+    if (type === 'character' && roleFilter !== 'all') {
+      return entry.type === 'character' && entry.role === roleFilter;
+    }
+    if (type === 'world' && categoryFilter !== 'all') {
+      return entry.type === 'world' && entry.category === categoryFilter;
+    }
+    if (type === 'plot' && statusFilter !== 'all') {
+      return entry.type === 'plot' && entry.status === statusFilter;
     }
     return true;
-  }), [items, plotStatusFilter, type, worldCategoryFilter]);
+  }), [categoryQuery, characterRoleFilter, entryQuery, items, plotStatusFilter, roleQuery, sidebarKeyword, statusQuery, type, worldCategoryFilter]);
+
+  const addStructuredRelation = (): void => {
+    if (!relationTargetId || !relationLabel.trim()) {
+      message.warning('请选择关联角色并填写关系类型');
+      return;
+    }
+    const target = items.find((entry) => entry.id === relationTargetId);
+    const current = String(form.getFieldValue('relationsText') ?? '').trim();
+    const relationLine = `${relationTargetId}, character, ${relationLabel.trim()}${relationBidirectional ? `；双向：${reverseRelationLabel.trim() || relationLabel.trim()}` : ''}${target ? `；目标：${target.title}` : ''}`;
+    form.setFieldValue('relationsText', [current, relationLine].filter(Boolean).join('\n'));
+    setRelationTargetId(undefined);
+    setRelationLabel('');
+    setReverseRelationLabel('');
+    message.success('已添加结构化人物关系');
+  };
+
+  const exportCurrent = (): void => {
+    const blob = new Blob([JSON.stringify(filteredItems, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${entryTypeLabel(type)}数据库.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   const extraForm = useMemo(() => renderExtraFields(type, meta.primaryExtra, meta.primaryName), [type, meta.primaryExtra, meta.primaryName]);
 
   return (
-    <Space direction="vertical" size="large" className="page-stack">
-      <Card className="page-title-card">
-        <Typography.Title level={2}>{meta.title}</Typography.Title>
-        <Typography.Paragraph type="secondary">{meta.desc}</Typography.Paragraph>
-      </Card>
+    <div className="entries-page">
+      {!selectedProject && <Alert className="entries-page-banner" showIcon type="warning" message="未选择作品" description="请先在作品管理中创建或选择当前作品。" />}
+      {error && <Alert className="entries-page-banner" showIcon type="error" message="加载失败" description={error} />}
 
-      {!selectedProject && <Alert showIcon type="warning" message="未选择作品" description="请先在作品管理中创建或选择当前作品。" />}
-      {error && <Alert showIcon type="error" message="加载失败" description={error} />}
-
-      <Card title={editingEntry ? `编辑设定：${editingEntry.title}` : '新增设定'} className="feature-card" extra={<Button icon={<RobotOutlined />} onClick={() => void aiComplete()}>AI 辅助补全</Button>}>
+      <Modal
+        title={editingEntry ? `编辑设定：${editingEntry.title}` : `新增${entryTypeLabel(type)}`}
+        open={createOpen}
+        width={760}
+        onCancel={() => { setCreateOpen(false); cancelEdit(); }}
+        footer={null}
+      >
+        <Space className="modal-toolbar" wrap>
+          <Button icon={<RobotOutlined />} onClick={() => void aiComplete()}>AI 辅助补全</Button>
+        </Space>
         <Form form={form} layout="vertical" onFinish={(values) => void saveEntry(values)} disabled={!selectedProject}>
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }, { max: 80, message: '标题不超过 80 字' }]}>
             <Input placeholder="例如：主角 / 北境商会 / 银钥匙伏笔" />
@@ -197,7 +263,18 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
             <Input placeholder="主线, 阵营, 高风险" />
           </Form.Item>
           {extraForm}
-          <Form.Item name="relationsText" label="关系" extra="每行：目标ID, 类型(character/world/plot), 关系说明">
+          {type === 'character' && (
+            <Card size="small" title="结构化人物关系" className="relationship-builder">
+              <Space wrap>
+                <Select placeholder="选择关联角色" value={relationTargetId} onChange={setRelationTargetId} className="relation-select" options={items.filter((entry) => entry.type === 'character' && entry.id !== editingEntry?.id).map((entry) => ({ value: entry.id, label: entry.title }))} />
+                <Input value={relationLabel} onChange={(event) => setRelationLabel(event.target.value)} placeholder="关系类型：父亲 / 朋友 / 敌人" className="find-input" />
+                <Switch checked={relationBidirectional} onChange={setRelationBidirectional} checkedChildren="双向" unCheckedChildren="单向" />
+                {relationBidirectional && <Input value={reverseRelationLabel} onChange={(event) => setReverseRelationLabel(event.target.value)} placeholder="反向关系：女儿 / 朋友" className="find-input" />}
+                <Button onClick={addStructuredRelation}>添加关系</Button>
+              </Space>
+            </Card>
+          )}
+          <Form.Item name="relationsText" label="关系" extra="每行：目标ID, 类型(character/world/plot), 关系说明；也可使用上方结构化关系选择器生成">
             <Input.TextArea rows={3} placeholder="char-lingxi, character, 师徒" />
           </Form.Item>
           <Form.Item name="customFieldsText" label="自定义字段" extra="每行：字段名=字段值">
@@ -208,23 +285,42 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
             {editingEntry && <Button onClick={cancelEdit}>取消编辑</Button>}
           </Space>
         </Form>
-      </Card>
+      </Modal>
 
-      <Card
-        title="条目列表"
-        className="feature-card"
-        extra={(
-          <Space wrap>
-            {type === 'world' && <Select value={worldCategoryFilter} options={worldCategoryOptions} onChange={setWorldCategoryFilter} />}
-            {type === 'plot' && <Select value={plotStatusFilter} options={plotStatusOptions} onChange={setPlotStatusFilter} />}
-          </Space>
-        )}
-      >
-        <List
+      <div className="entries-toolbar-flat">
+        <div className="entries-toolbar-left">
+          <Typography.Text className="entries-toolbar-title">{`${entryTypeLabel(type)}数据库`}</Typography.Text>
+        </div>
+        <Space wrap className="entries-toolbar-actions" size={4}>
+          {type === 'character' && <Select size="small" value={roleQuery !== 'all' ? roleQuery : characterRoleFilter} onChange={setCharacterRoleFilter} options={[{ value: 'all', label: '全部角色' }, { value: 'protagonist', label: '主角' }, { value: 'supporting', label: '配角' }, { value: 'antagonist', label: '反派' }, { value: 'other', label: '其他' }]} />}
+          <Radio.Group size="small" value={viewMode} onChange={(event) => setViewMode(event.target.value)} optionType="button" options={[{ value: 'cards', label: '卡片' }, { value: 'list', label: '列表' }, { value: 'graph', label: '关系网' }]} />
+          {type === 'world' && <Select size="small" value={categoryQuery !== 'all' ? categoryQuery : worldCategoryFilter} options={worldCategoryOptions} onChange={setWorldCategoryFilter} />}
+          {type === 'plot' && <Select size="small" value={statusQuery !== 'all' ? statusQuery : plotStatusFilter} options={plotStatusOptions} onChange={setPlotStatusFilter} />}
+          <Button size="small" icon={<DownloadOutlined />} onClick={exportCurrent}>导出</Button>
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增{entryTypeLabel(type)}</Button>
+        </Space>
+      </div>
+
+      <div className="entries-content">
+        {viewMode === 'graph' && type === 'character' ? (
+          <RelationshipCanvas characters={filteredItems.filter((entry) => entry.type === 'character')} onSelectCharacter={setActiveEntry} />
+        ) : viewMode === 'graph' ? (
+          <div className="relation-graph relation-graph-fallback">
+            {filteredItems.map((entry) => <button key={entry.id} className="graph-node" onClick={() => setActiveEntry(entry)}>{entry.title}</button>)}
+            {filteredItems.flatMap((entry) => entry.relations.map((relation) => <span key={`${entry.id}-${relation.targetId}`} className="graph-edge">{entry.title} → {relation.label || relation.targetId}</span>))}
+            {filteredItems.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可展示关系" />}
+          </div>
+        ) : <List
+          grid={viewMode === 'cards' ? { gutter: 24, xs: 1, sm: 2, md: 2, lg: 3, xl: 3, xxl: 4 } : undefined}
           loading={loading}
           dataSource={filteredItems}
+          pagination={{ pageSize: 12, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无条目" /> }}
-          renderItem={(entry) => (
+          renderItem={(entry) => viewMode === 'cards' ? (
+            <List.Item>
+              {type === 'character' ? renderCharacterCard(entry, setActiveEntry, editEntry, deleteEntry) : renderKnowledgeCard(entry, type, setActiveEntry, editEntry, deleteEntry, markResolved)}
+            </List.Item>
+          ) : (
             <List.Item
               actions={[
                 <Button key="open" onClick={() => setActiveEntry(entry)}>查看</Button>,
@@ -238,20 +334,138 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
               <List.Item.Meta title={<Space><Tag>{entryTypeLabel(type)}</Tag>{entry.title}{renderEntryTags(entry)}</Space>} description={entry.summary || `更新于 ${new Date(entry.updatedAt).toLocaleString()}`} />
             </List.Item>
           )}
-        />
-      </Card>
+        />}
+      </div>
 
       {activeEntry && (
-        <Card title="速览" className="feature-card">
-          <Typography.Title level={4}>{activeEntry.title}</Typography.Title>
-          <Typography.Paragraph>{activeEntry.summary}</Typography.Paragraph>
-          <Typography.Paragraph className="entry-content">{activeEntry.content || '暂无正文设定'}</Typography.Paragraph>
-          <Space wrap>{activeEntry.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</Space>
-          <Typography.Paragraph type="secondary">关系：{activeEntry.relations.length || 0} 条 · 自定义字段：{Object.keys(activeEntry.customFields).length || 0} 项</Typography.Paragraph>
-        </Card>
+        <div className="entries-detail-flat">
+          <div className="entries-detail-header">
+            <Typography.Title level={4} className="entries-detail-title">{activeEntry.title}</Typography.Title>
+            <Space wrap>{activeEntry.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</Space>
+          </div>
+          {activeEntry.summary && <Typography.Paragraph className="entries-detail-summary">{activeEntry.summary}</Typography.Paragraph>}
+          <Typography.Paragraph className="entries-detail-content">{activeEntry.content || '暂无正文设定'}</Typography.Paragraph>
+          <Typography.Text className="entries-detail-meta">关系：{activeEntry.relations.length || 0} 条 · 自定义字段：{Object.keys(activeEntry.customFields).length || 0} 项</Typography.Text>
+          {activeEntry.type === 'character' && (
+            <div className="entries-detail-relations">
+              <div className="entries-detail-relations-title">人物关系</div>
+              <div className="relation-strip">
+                {activeEntry.relations.length === 0 && <Typography.Text type="secondary">暂无结构化关系，可在编辑弹窗中添加。</Typography.Text>}
+                {activeEntry.relations.map((relation) => (
+                  <div className="relation-card" key={`${relation.targetId}-${relation.label}`}>
+                    <Avatar>{relation.targetId.slice(0, 1).toUpperCase()}</Avatar>
+                    <Tag color="blue">{relation.label || '关联'}</Tag>
+                    <Typography.Link>{relation.targetId}</Typography.Link>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
-    </Space>
+    </div>
   );
+}
+
+function renderKnowledgeCard(
+  entry: ProjectEntry,
+  type: EntryType,
+  setActiveEntry: (entry: ProjectEntry) => void,
+  editEntry: (entry: ProjectEntry) => void,
+  deleteEntry: (entry: ProjectEntry) => Promise<void>,
+  markResolved: (entry: ProjectEntry) => Promise<void>
+): React.ReactNode {
+  const tone = type === 'world' ? worldTone(entry) : plotTone(entry);
+  const eyebrow = type === 'world' && entry.type === 'world' ? worldCategoryLabel(entry.category) : entry.type === 'plot' ? plotStatusLabel(entry.status) : entryTypeLabel(type);
+  const headline = entry.title;
+  const subline = type === 'world' && entry.type === 'world' ? `${entry.rules.length} 条硬规则 · ${entry.relations.length} 个关联` : entry.type === 'plot' ? `${entry.setupChapter || '未知章节'} → ${entry.expectedPayoffChapter || '待定回收'}` : `${entry.tags.length} 个标签`;
+  const intro = entry.summary || entry.content || '暂无摘要，可在编辑弹窗中补充核心设定。';
+
+  return (
+    <article className={`knowledge-profile-card ${tone}`} onClick={() => setActiveEntry(entry)}>
+      <div className="knowledge-cover">
+        <span className="knowledge-symbol">{type === 'world' ? '界' : '伏'}</span>
+        <div className="knowledge-card-actions" onClick={(event) => event.stopPropagation()}>
+          <Button size="small" onClick={() => setActiveEntry(entry)}>详情</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => editEntry(entry)}>编辑</Button>
+          {entry.type === 'plot' && entry.status !== 'resolved' && <Button size="small" icon={<CheckCircleOutlined />} onClick={() => void markResolved(entry)}>回收</Button>}
+          <Popconfirm title={`删除${entryTypeLabel(type)}`} onConfirm={() => void deleteEntry(entry)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </div>
+      </div>
+      <div className="knowledge-card-body">
+        <Tag color={type === 'world' ? 'geekblue' : entry.type === 'plot' && entry.status === 'resolved' ? 'green' : 'gold'}>{eyebrow}</Tag>
+        <Typography.Title level={4} className="character-name">{headline}</Typography.Title>
+        <Typography.Text className="character-identity">{subline}</Typography.Text>
+        <Typography.Paragraph className="character-intro">{intro}</Typography.Paragraph>
+        <Space wrap className="character-tags">{entry.tags.slice(0, 4).map((tag) => <Tag key={tag}>{tag}</Tag>)}</Space>
+      </div>
+    </article>
+  );
+}
+
+function worldTone(entry: ProjectEntry): string {
+  if (entry.type !== 'world') return 'tone-world';
+  return `tone-world tone-${entry.category}`;
+}
+
+function plotTone(entry: ProjectEntry): string {
+  if (entry.type !== 'plot') return 'tone-plot';
+  return `tone-plot tone-${entry.status}`;
+}
+
+function worldCategoryLabel(category: string): string {
+  return ({ geography: '地理', faction: '势力', magic: '魔法', technology: '科技', history: '历史', culture: '文化', other: '其他' } as Record<string, string>)[category] ?? '世界观';
+}
+
+function plotStatusLabel(status: string): string {
+  return ({ open: '未回收', resolved: '已回收', abandoned: '废弃' } as Record<string, string>)[status] ?? '线索';
+}
+
+function renderCharacterCard(
+  entry: ProjectEntry,
+  setActiveEntry: (entry: ProjectEntry) => void,
+  editEntry: (entry: ProjectEntry) => void,
+  deleteEntry: (entry: ProjectEntry) => Promise<void>
+): React.ReactNode {
+  if (entry.type !== 'character') return null;
+  const identity = entry.customFields['身份'] || entry.customFields['职位'] || entry.abilities || '身份 / 职位未填写';
+  const avatar = entry.customFields['头像'] || entry.customFields['avatar'] || entry.customFields['海报'];
+  const intro = entry.summary || entry.content || entry.background || '暂无简介，可在角色详情中补充核心特征、背景或动机。';
+
+  return (
+    <article className="character-profile-card" onClick={() => setActiveEntry(entry)}>
+      <div className="character-cover">
+        {avatar ? <img src={avatar} alt={entry.title} /> : <div className="character-cover-fallback">{entry.title.slice(0, 1)}</div>}
+        <div className="character-card-actions" onClick={(event) => event.stopPropagation()}>
+          <Button size="small" onClick={() => setActiveEntry(entry)}>详情</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => editEntry(entry)}>编辑</Button>
+          <Popconfirm title="删除角色" onConfirm={() => void deleteEntry(entry)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </div>
+      </div>
+      <div className="character-card-body">
+        <Tag color={roleColor(entry.role)} className="character-role-tag">{roleLabel(entry.role)}</Tag>
+        <Typography.Title level={4} className="character-name">{entry.title}</Typography.Title>
+        <Typography.Text className="character-identity">{identity}</Typography.Text>
+        <Typography.Paragraph className="character-intro">{intro}</Typography.Paragraph>
+        <Space wrap className="character-tags">
+          {entry.personalityTags.slice(0, 3).map((tag) => <Tag key={tag}>{tag}</Tag>)}
+          {entry.tags.slice(0, 2).map((tag) => <Tag key={tag}>{tag}</Tag>)}
+        </Space>
+      </div>
+    </article>
+  );
+}
+
+function roleLabel(role: string): string {
+  return ({ protagonist: '主角', supporting: '配角', antagonist: '反派', other: '其他' } as Record<string, string>)[role] ?? '角色';
+}
+
+function roleColor(role: string): string {
+  return ({ protagonist: 'volcano', supporting: 'blue', antagonist: 'red', other: 'default' } as Record<string, string>)[role] ?? 'default';
 }
 
 function renderExtraFields(type: EntryType, label: string, name: string): React.ReactNode {

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { IPC_CHANNELS } from '../shared/ipc.js';
 import type { EntryType, ProjectCreateInput, RagQueryRequest, SearchQuery, ValidationRequest } from '../shared/storageTypes.js';
 import { StorageService } from './services/storageService.js';
+import { getSystemFonts } from './services/fontService.js';
 
 const isDevelopment = !app.isPackaged;
 const storageService = new StorageService();
@@ -13,6 +14,7 @@ let floatingPinned = true;
 let mainPinned = false;
 
 function createMainWindow(): void {
+  Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -20,7 +22,9 @@ function createMainWindow(): void {
     minHeight: 720,
     title: 'HetuSketch 河图速写',
     show: false,
-    backgroundColor: '#f5efe3',
+    frame: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#1f1a14',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -157,6 +161,55 @@ function setMainPinned(pinned: boolean): { pinned: boolean } {
   return { pinned: mainPinned };
 }
 
+function openAppWindow(path: string): void {
+  const target = path.startsWith('/') ? path : `/${path}`;
+  const newWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 1080,
+    minHeight: 720,
+    title: 'HetuSketch 河图速写',
+    show: false,
+    frame: false,
+    autoHideMenuBar: true,
+    backgroundColor: '#1f1a14',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true
+    }
+  });
+
+  newWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+  });
+
+  newWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://') || url.startsWith('http://')) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  newWindow.once('ready-to-show', () => {
+    newWindow.show();
+  });
+
+  if (isDevelopment && process.env.ELECTRON_RENDERER_URL) {
+    void newWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}${target}`);
+  } else {
+    void newWindow.loadFile(join(__dirname, '../renderer/index.html'));
+    newWindow.webContents.on('did-finish-load', () => {
+      newWindow.webContents.executeJavaScript(`
+        window.history.pushState({}, '', ${JSON.stringify(target)});
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      `).catch(() => {});
+    });
+  }
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.appInfo, () => ({
     name: app.getName(),
@@ -177,6 +230,33 @@ function registerIpcHandlers(): void {
     storageService.listRecentAccess(asOptionalString(projectId), asOptionalLimit(limit))
   );
   ipcMain.handle(IPC_CHANNELS.dashboardStats, (_event, projectId: unknown) => storageService.getDashboardStats(asOptionalString(projectId)));
+
+  ipcMain.handle(IPC_CHANNELS.settingSetsList, () => storageService.listSettingSets());
+  ipcMain.handle(IPC_CHANNELS.settingSetsGet, (_event, id: unknown) => storageService.getSettingSet(asRequiredString(id, 'settingSetId')));
+  ipcMain.handle(IPC_CHANNELS.settingSetsCreate, (_event, input: unknown) => storageService.createSettingSet(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.settingSetsUpdate, (_event, input: unknown) => storageService.updateSettingSet(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.settingSetsDelete, (_event, id: unknown, strategy: unknown) =>
+    storageService.deleteSettingSet(asRequiredString(id, 'settingSetId'), strategy === 'detach_books' ? 'detach_books' : 'block')
+  );
+
+  ipcMain.handle(IPC_CHANNELS.booksList, () => storageService.listBooks());
+  ipcMain.handle(IPC_CHANNELS.booksGet, (_event, bookId: unknown) => storageService.getBook(asRequiredString(bookId, 'bookId')));
+  ipcMain.handle(IPC_CHANNELS.booksCreate, (_event, input: unknown) => storageService.createBook(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.booksUpdate, (_event, input: unknown) => storageService.updateBook(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.booksDelete, (_event, bookId: unknown) => storageService.deleteBook(asRequiredString(bookId, 'bookId')));
+  ipcMain.handle(IPC_CHANNELS.booksBindSettingSet, (_event, bookId: unknown, settingSetId: unknown) =>
+    storageService.bindBookSettingSet(asRequiredString(bookId, 'bookId'), asOptionalString(settingSetId))
+  );
+
+  ipcMain.handle(IPC_CHANNELS.chaptersListTree, (_event, bookId: unknown) => storageService.listBookTree(asRequiredString(bookId, 'bookId')));
+  ipcMain.handle(IPC_CHANNELS.chaptersCreateVolume, (_event, input: unknown) => storageService.createVolume(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.chaptersUpdateVolume, (_event, input: unknown) => storageService.updateVolume(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.chaptersCreateChapter, (_event, input: unknown) => storageService.createChapter(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.chaptersUpdateChapter, (_event, input: unknown) => storageService.updateChapter(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.chaptersMoveChapter, (_event, input: unknown) => storageService.moveChapter(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.chaptersDeleteChapter, (_event, bookId: unknown, chapterId: unknown) =>
+    storageService.deleteChapter(asRequiredString(bookId, 'bookId'), asRequiredString(chapterId, 'chapterId'))
+  );
 
   ipcMain.handle(IPC_CHANNELS.projectsList, () => storageService.listProjects());
   ipcMain.handle(IPC_CHANNELS.projectsGet, (_event, projectId: unknown) => storageService.getProject(asRequiredString(projectId, 'projectId')));
@@ -250,11 +330,27 @@ function registerIpcHandlers(): void {
     storageService.rebuildIndex(typeof projectId === 'string' ? projectId : undefined)
   );
 
+  ipcMain.handle(IPC_CHANNELS.systemFonts, () => getSystemFonts());
+
   ipcMain.handle(IPC_CHANNELS.desktopFloatingToggle, () => toggleFloatingWindow());
   ipcMain.handle(IPC_CHANNELS.desktopFloatingShow, () => showFloatingWindow());
   ipcMain.handle(IPC_CHANNELS.desktopFloatingHide, () => hideFloatingWindow());
   ipcMain.handle(IPC_CHANNELS.desktopFloatingPin, (_event, pinned: unknown) => setFloatingPinned(Boolean(pinned)));
   ipcMain.handle(IPC_CHANNELS.desktopMainPin, (_event, pinned: unknown) => setMainPinned(Boolean(pinned)));
+  ipcMain.handle(IPC_CHANNELS.desktopWindowMinimize, () => mainWindow?.minimize());
+  ipcMain.handle(IPC_CHANNELS.desktopWindowMaximize, () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow?.maximize();
+    }
+    return { maximized: Boolean(mainWindow?.isMaximized()) };
+  });
+  ipcMain.handle(IPC_CHANNELS.desktopWindowClose, () => mainWindow?.close());
+  ipcMain.handle(IPC_CHANNELS.desktopOpenWindow, (_event, path: unknown) => {
+    const safePath = typeof path === 'string' && path.trim() ? path.trim() : '/';
+    openAppWindow(safePath);
+  });
 }
 
 app.whenReady().then(() => {

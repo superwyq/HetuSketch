@@ -8,7 +8,17 @@ import type {
   AiSkillSaveInput,
   AiValidationRequest,
   AiValidationResult,
+  BookBindingResult,
+  BookCreateInput,
+  BookManifest,
+  BookTree,
+  BookUpdateInput,
+  ChapterCreateInput,
+  ChapterMoveInput,
+  ChapterNode,
+  ChapterUpdateInput,
   DashboardStats,
+  DeleteSettingSetStrategy,
   EntryCreateInput,
   EntryListQuery,
   EntryType,
@@ -30,8 +40,14 @@ import type {
   SearchQuery,
   SearchResultItem,
   SettingCompletionRequest,
+  SettingSetCreateInput,
+  SettingSetManifest,
+  SettingSetUpdateInput,
   VectorIndexState,
   SettingCompletionResult,
+  VolumeCreateInput,
+  VolumeNode,
+  VolumeUpdateInput,
   ValidationFinding,
   ValidationRequest,
   ValidationResult
@@ -44,6 +60,24 @@ export const IPC_CHANNELS = {
   searchGlobal: 'search:global',
   recentList: 'recent:list',
   dashboardStats: 'dashboard:stats',
+  settingSetsList: 'setting-sets:list',
+  settingSetsGet: 'setting-sets:get',
+  settingSetsCreate: 'setting-sets:create',
+  settingSetsUpdate: 'setting-sets:update',
+  settingSetsDelete: 'setting-sets:delete',
+  booksList: 'books:list',
+  booksGet: 'books:get',
+  booksCreate: 'books:create',
+  booksUpdate: 'books:update',
+  booksDelete: 'books:delete',
+  booksBindSettingSet: 'books:bind-setting-set',
+  chaptersListTree: 'chapters:list-tree',
+  chaptersCreateVolume: 'chapters:create-volume',
+  chaptersUpdateVolume: 'chapters:update-volume',
+  chaptersCreateChapter: 'chapters:create-chapter',
+  chaptersUpdateChapter: 'chapters:update-chapter',
+  chaptersMoveChapter: 'chapters:move-chapter',
+  chaptersDeleteChapter: 'chapters:delete-chapter',
   projectsList: 'projects:list',
   projectsGet: 'projects:get',
   projectsCreate: 'projects:create',
@@ -76,11 +110,16 @@ export const IPC_CHANNELS = {
   aiSettingComplete: 'ai:setting:complete',
   aiForeshadowing: 'ai:foreshadowing',
   indexRebuild: 'index:rebuild',
+  systemFonts: 'system:fonts',
   desktopFloatingToggle: 'desktop:floating:toggle',
   desktopFloatingShow: 'desktop:floating:show',
   desktopFloatingHide: 'desktop:floating:hide',
   desktopFloatingPin: 'desktop:floating:pin',
-  desktopMainPin: 'desktop:main:pin'
+  desktopMainPin: 'desktop:main:pin',
+  desktopWindowMinimize: 'desktop:window:minimize',
+  desktopWindowMaximize: 'desktop:window:maximize',
+  desktopWindowClose: 'desktop:window:close',
+  desktopOpenWindow: 'desktop:window:open'
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -106,6 +145,30 @@ export interface HetuSketchApi {
   };
   dashboard: {
     stats: (projectId?: string) => Promise<DashboardStats>;
+  };
+  settingSets: {
+    list: () => Promise<SettingSetManifest[]>;
+    get: (id: string) => Promise<SettingSetManifest>;
+    create: (input: SettingSetCreateInput) => Promise<SettingSetManifest>;
+    update: (input: SettingSetUpdateInput) => Promise<SettingSetManifest>;
+    delete: (id: string, strategy: DeleteSettingSetStrategy) => Promise<void>;
+  };
+  books: {
+    list: () => Promise<BookManifest[]>;
+    get: (bookId: string) => Promise<BookManifest>;
+    create: (input: BookCreateInput) => Promise<BookManifest>;
+    update: (input: BookUpdateInput) => Promise<BookManifest>;
+    delete: (bookId: string) => Promise<void>;
+    bindSettingSet: (bookId: string, settingSetId?: string) => Promise<BookBindingResult>;
+  };
+  chapters: {
+    listTree: (bookId: string) => Promise<BookTree>;
+    createVolume: (input: VolumeCreateInput) => Promise<VolumeNode>;
+    updateVolume: (input: VolumeUpdateInput) => Promise<VolumeNode>;
+    createChapter: (input: ChapterCreateInput) => Promise<ChapterNode>;
+    updateChapter: (input: ChapterUpdateInput) => Promise<ChapterNode>;
+    moveChapter: (input: ChapterMoveInput) => Promise<BookTree>;
+    deleteChapter: (bookId: string, chapterId: string) => Promise<void>;
   };
   projects: {
     list: () => Promise<ProjectManifest[]>;
@@ -151,11 +214,18 @@ export interface HetuSketchApi {
   index: {
     rebuild: (projectId?: string) => Promise<IndexSyncSummary>;
   };
+  system: {
+    fonts: () => Promise<string[]>;
+  };
   desktop: {
     toggleFloating: () => Promise<{ visible: boolean; pinned: boolean }>;
     showFloating: () => Promise<{ visible: boolean; pinned: boolean }>;
     hideFloating: () => Promise<{ visible: boolean; pinned: boolean }>;
     setFloatingPinned: (pinned: boolean) => Promise<{ visible: boolean; pinned: boolean }>;
     setMainPinned: (pinned: boolean) => Promise<{ pinned: boolean }>;
+    minimize: () => Promise<void>;
+    maximize: () => Promise<{ maximized: boolean }>;
+    close: () => Promise<void>;
+    openWindow: (path: string) => Promise<void>;
   };
 }

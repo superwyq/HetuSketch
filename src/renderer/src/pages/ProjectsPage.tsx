@@ -1,5 +1,5 @@
 import { DeleteOutlined, DownloadOutlined, EditOutlined, FolderOpenOutlined, ImportOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Progress, Select, Space, Statistic, Tag, message } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import type { ProjectCreateInput, ProjectManifest } from '@shared/storageTypes';
 import { useAppStore } from '../store/appStore';
@@ -12,6 +12,7 @@ export function ProjectsPage(): React.JSX.Element {
   const [projects, setProjects] = useState<ProjectManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<ProjectManifest>();
   const [error, setError] = useState<string>();
 
@@ -41,6 +42,7 @@ export function ProjectsPage(): React.JSX.Element {
       const project = await window.hetuSketch.projects.create({ ...values, summary: values.summary ?? '' });
       setSelectedProject(project);
       form.resetFields();
+      setCreateOpen(false);
       message.success('作品已创建');
       await loadProjects();
     } catch (reason) {
@@ -99,15 +101,10 @@ export function ProjectsPage(): React.JSX.Element {
   };
 
   return (
-    <Space direction="vertical" size="large" className="page-stack">
-      <Card className="page-title-card">
-        <Typography.Title level={2}>作品管理</Typography.Title>
-        <Typography.Paragraph type="secondary">作品是角色、世界观和伏笔线索的本地容器。创建后会初始化 JSON/Markdown 事实源与 SQLite 索引。</Typography.Paragraph>
-      </Card>
-
+    <Space direction="vertical" size="middle" className="page-stack">
       {error && <Alert showIcon type="error" message="加载失败" description={error} />}
 
-      <Card title="新建作品" className="feature-card">
+      <Modal title="新建作品" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null}>
         <Form form={form} layout="vertical" onFinish={(values) => void createProject(values)}>
           <Form.Item name="name" label="作品名称" rules={[{ required: true, message: '请输入作品名称' }, { max: 60, message: '作品名称不超过 60 字' }]}>
             <Input placeholder="例如：雾海纪元" />
@@ -120,13 +117,14 @@ export function ProjectsPage(): React.JSX.Element {
           </Form.Item>
           <Button type="primary" htmlType="submit" icon={<PlusOutlined />} loading={saving}>创建作品</Button>
         </Form>
-      </Card>
+      </Modal>
 
       <Card
         title="本地作品"
         className="feature-card"
         extra={(
           <Space wrap>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增作品</Button>
             <Button icon={<ImportOutlined />} onClick={() => void importProject('folder')}>导入目录</Button>
             <Button icon={<ImportOutlined />} onClick={() => void importProject('zip')}>导入 Zip</Button>
             <Button icon={<ReloadOutlined />} onClick={() => void loadProjects()}>刷新</Button>
@@ -150,7 +148,16 @@ export function ProjectsPage(): React.JSX.Element {
             >
               <List.Item.Meta
                 title={<Space><span>{project.name}</span>{selectedProject?.id === project.id && <Tag color="volcano">当前</Tag>}<Tag>{project.type === 'original' ? '原创' : '同人'}</Tag></Space>}
-                description={project.summary || `更新于 ${new Date(project.updatedAt).toLocaleString()}`}
+                description={(
+                  <Space direction="vertical" className="full-width">
+                    <span>{project.summary || `更新于 ${new Date(project.updatedAt).toLocaleString()}`}</span>
+                    <Space wrap>
+                      <Statistic title="总字数" value={0} suffix="字" />
+                      <Statistic title="章节" value={0} suffix="章" />
+                      <Progress percent={0} size="small" className="project-progress" />
+                    </Space>
+                  </Space>
+                )}
               />
             </List.Item>
           )}
