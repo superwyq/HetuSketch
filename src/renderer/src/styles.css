@@ -1610,6 +1610,7 @@ button {
 .editor-area {
   grid-column: 4;
   grid-row: 2;
+  position: relative;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -1619,16 +1620,56 @@ button {
 }
 
 .editor-area.grid-1x1 { grid-template-columns: minmax(0, 1fr); }
-.editor-area.grid-1x2 { grid-template-columns: minmax(0, 1fr) minmax(280px, 36%); }
+.editor-area.grid-1x2 { grid-template-columns: minmax(0, calc(var(--editor-vertical-ratio, 0.64) * 100%)) minmax(280px, 1fr); }
 .editor-area.grid-2x2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
 
 .editor-area.grid-1-over-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, calc(var(--editor-grid-column-ratio, 0.5) * 100%)) minmax(0, 1fr);
+  grid-template-rows: minmax(0, calc(var(--editor-grid-row-ratio, 0.52) * 100%)) minmax(0, 1fr);
 }
 
-.editor-area.grid-1-over-2 > .editor-group:first-child {
+.editor-area.grid-1-over-2 > .editor-group:first-of-type {
   grid-column: 1 / -1;
+}
+
+.editor-area.is-empty {
+  display: grid;
+  place-items: center;
+  background: var(--color-background);
+}
+
+.editor-split-sash {
+  position: absolute;
+  z-index: 5;
+  background: var(--color-border);
+  transition: background 120ms ease;
+}
+
+.editor-split-sash:hover {
+  background: var(--color-primary);
+}
+
+.editor-split-sash-vertical {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--editor-vertical-ratio, 0.64) * 100%);
+  width: 7px;
+  transform: translateX(-4px);
+  cursor: col-resize;
+}
+
+.editor-split-sash-horizontal {
+  left: 0;
+  right: 0;
+  top: calc(var(--editor-grid-row-ratio, 0.52) * 100%);
+  height: 7px;
+  transform: translateY(-4px);
+  cursor: row-resize;
+}
+
+.editor-split-sash-vertical.is-lower-only {
+  top: calc(var(--editor-grid-row-ratio, 0.52) * 100%);
+  left: calc(var(--editor-grid-column-ratio, 0.5) * 100%);
 }
 
 .editor-group {
@@ -1637,7 +1678,13 @@ button {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  border: 1px solid transparent;
   background: var(--color-surface);
+}
+
+.editor-group.is-current {
+  border-color: var(--color-ring);
+  box-shadow: inset 0 0 0 1px var(--color-ring);
 }
 
 .editor-tabbar {
@@ -1911,7 +1958,8 @@ button {
 
 .workbench-sash:hover,
 .workbench-sash:focus,
-.is-resizing .workbench-sash {
+.is-resizing .workbench-sash,
+.is-resizing .editor-split-sash {
   background: var(--color-sash-hover);
   outline: none;
 }
@@ -1989,22 +2037,79 @@ button {
 }
 
 .workbench-welcome {
+  position: relative;
+  isolation: isolate;
   display: grid;
   place-items: center;
   align-content: center;
   gap: 10px;
   min-height: 100%;
+  padding: 48px;
+  overflow: visible;
   color: var(--color-foreground-muted);
   text-align: center;
 }
 
-.workbench-welcome > .anticon {
-  color: var(--color-primary);
-  font-size: 52px;
+.workbench-welcome::before {
+  position: absolute;
+  inset: 18%;
+  z-index: -2;
+  border: 1px solid color-mix(in srgb, var(--color-border) 62%, transparent);
+  border-radius: 999px;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 62%);
+  content: '';
+  filter: blur(0.2px);
 }
 
-.workbench-welcome.compact > .anticon {
-  font-size: 36px;
+.workbench-watermark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: -1;
+  display: inline-block;
+  color: color-mix(in srgb, var(--color-foreground) 8%, transparent);
+  font-size: clamp(96px, 18vw, 260px);
+  font-weight: 1000;
+  letter-spacing: -0.03em;
+  line-height: 0.82;
+  pointer-events: none;
+  text-transform: uppercase;
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.workbench-welcome-kicker {
+  color: var(--color-foreground-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+}
+
+.workbench-welcome .ant-typography {
+  margin: 0;
+}
+
+.workbench-welcome h2.ant-typography,
+.workbench-welcome h4.ant-typography {
+  color: color-mix(in srgb, var(--color-foreground) 86%, var(--color-primary));
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.workbench-welcome .ant-typography-secondary {
+  max-width: 420px;
+  color: var(--color-foreground-muted);
+}
+
+.workbench-welcome.compact {
+  padding: 28px;
+}
+
+.workbench-welcome.compact .workbench-watermark {
+  font-size: clamp(72px, 14vw, 180px);
 }
 
 .page-suspense-fallback {

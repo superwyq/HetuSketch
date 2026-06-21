@@ -55,6 +55,14 @@ const SIDEBAR_FOLDERS_STORAGE_KEY = 'hetusketch.workbench.sidebarFolders.v1';
 type ActivityId = typeof ACTIVITY_DEFAULT_ORDER[number];
 type PanelTabId = 'ai' | 'characters' | 'worlds' | 'plots' | 'output';
 type EditorTabKey = string;
+type EditorGroupId = 'main' | `secondary-${number}`;
+
+interface EditorOpenRequest {
+  id: number;
+  groupId: EditorGroupId;
+  path: string;
+  replace?: boolean;
+}
 
 interface EditorTab {
   key: EditorTabKey;
@@ -78,6 +86,9 @@ interface WorkbenchLayoutState {
   secondaryVisible: boolean;
   panelVisible: boolean;
   editorSplit: 'single' | 'vertical' | 'grid';
+  editorVerticalRatio: number;
+  editorGridRowRatio: number;
+  editorGridColumnRatio: number;
 }
 
 interface ActivityItem {
@@ -139,7 +150,10 @@ const defaultLayout: WorkbenchLayoutState = {
   primaryVisible: true,
   secondaryVisible: false,
   panelVisible: true,
-  editorSplit: 'single'
+  editorSplit: 'single',
+  editorVerticalRatio: 0.64,
+  editorGridRowRatio: 0.52,
+  editorGridColumnRatio: 0.5
 };
 
 export function App(): React.JSX.Element {
@@ -166,6 +180,8 @@ export function App(): React.JSX.Element {
   });
   const [draggingActivityId, setDraggingActivityId] = useState<string>();
   const [activePanelTab, setActivePanelTab] = useState<PanelTabId>('ai');
+  const [currentEditorGroupId, setCurrentEditorGroupId] = useState<EditorGroupId>('main');
+  const [editorOpenRequest, setEditorOpenRequest] = useState<EditorOpenRequest>();
 
   useEffect(() => {
     localStorage.removeItem('hetusketch.iteration.worldSubDatabases');
@@ -287,7 +303,11 @@ export function App(): React.JSX.Element {
     });
   };
 
-  const navigateInCurrentTab = useCallback((path: string) => navigate(path, { state: { replaceTab: true } }), [navigate]);
+  const openInCurrentEditorGroup = useCallback((path: string, replace = false) => {
+    setEditorOpenRequest({ id: Date.now() + Math.random(), groupId: currentEditorGroupId, path, replace });
+  }, [currentEditorGroupId]);
+
+  const navigateInCurrentTab = useCallback((path: string) => openInCurrentEditorGroup(path, true), [openInCurrentEditorGroup]);
 
   if (location.pathname === '/quick-lookup') {
     return (
@@ -370,7 +390,17 @@ export function App(): React.JSX.Element {
 
       <EditorWorkbench
         splitMode={layout.editorSplit}
+        verticalRatio={layout.editorVerticalRatio}
+        gridRowRatio={layout.editorGridRowRatio}
+        gridColumnRatio={layout.editorGridColumnRatio}
+        currentGroupId={currentEditorGroupId}
+        openRequest={editorOpenRequest}
+        onOpenRequestHandled={() => setEditorOpenRequest(undefined)}
+        onCurrentGroupChange={setCurrentEditorGroupId}
         onSplitModeChange={(editorSplit) => updateLayout({ editorSplit })}
+        onVerticalRatioChange={(editorVerticalRatio) => updateLayout({ editorVerticalRatio })}
+        onGridRowRatioChange={(editorGridRowRatio) => updateLayout({ editorGridRowRatio })}
+        onGridColumnRatioChange={(editorGridColumnRatio) => updateLayout({ editorGridColumnRatio })}
       />
 
       <Sash
@@ -1058,24 +1088,63 @@ function plotTreeNodes(): TreeNodeItem[] {
   ];
 }
 
-function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: WorkbenchLayoutState['editorSplit']; onSplitModeChange: (mode: WorkbenchLayoutState['editorSplit']) => void }): React.JSX.Element {
+function EditorWorkbench({
+  splitMode,
+  verticalRatio,
+  gridRowRatio,
+  gridColumnRatio,
+  currentGroupId,
+  openRequest,
+  onOpenRequestHandled,
+  onCurrentGroupChange,
+  onSplitModeChange,
+  onVerticalRatioChange,
+  onGridRowRatioChange,
+  onGridColumnRatioChange
+}: {
+  splitMode: WorkbenchLayoutState['editorSplit'];
+  verticalRatio: number;
+  gridRowRatio: number;
+  gridColumnRatio: number;
+  currentGroupId: EditorGroupId;
+  openRequest?: EditorOpenRequest;
+  onOpenRequestHandled: () => void;
+  onCurrentGroupChange: (groupId: EditorGroupId) => void;
+  onSplitModeChange: (mode: WorkbenchLayoutState['editorSplit']) => void;
+  onVerticalRatioChange: (ratio: number) => void;
+  onGridRowRatioChange: (ratio: number) => void;
+  onGridColumnRatioChange: (ratio: number) => void;
+}): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const activePath = `${location.pathname}${location.search}`;
   const previousActivePathRef = useRef(activePath);
+  const areaRef = useRef<HTMLElement>(null);
   const [tabs, setTabs] = useState<EditorTab[]>(() => readArray<EditorTab>(OPEN_TABS_STORAGE_KEY, [
     { key: '/dashboard', title: '总览', path: '/dashboard', dirty: false },
     { key: '/workspace/editor', title: '文本编辑器', path: '/workspace/editor', dirty: false }
   ]));
   const [draggingTabKey, setDraggingTabKey] = useState<string>();
+  const newTabSequenceRef = useRef(0);
   const [secondaryGroups, setSecondaryGroups] = useState<SecondaryGroupState[]>(() => readSecondaryGroups());
-  const gridClass = splitMode === 'grid' ? 'grid-1-over-2' : splitMode === 'vertical' ? 'grid-1x2' : 'grid-1x1';
   const secondaryCount = splitMode === 'grid' ? 2 : splitMode === 'vertical' ? 1 : 0;
+  const visibleSecondaryGroups = secondaryGroups.slice(0, secondaryCount);
+  const visibleGroupCount = (tabs.length > 0 ? 1 : 0) + visibleSecondaryGroups.filter((group) => group.tabs.length > 0).length;
+  const gridClass = visibleGroupCount <= 1 ? 'grid-1x1' : splitMode === 'grid' && visibleGroupCount >= 3 ? 'grid-1-over-2' : 'grid-1x2';
+  const hasVisibleTabs = visibleGroupCount > 0;
   const tabNameMap = useAppStore((state) => state.tabNameMap);
 
   const updateSecondaryGroup = useCallback((index: number, updater: (group: SecondaryGroupState) => SecondaryGroupState): void => {
     setSecondaryGroups((current) => current.map((group, i) => (i === index ? updater(group) : group)));
   }, []);
+
+  const ensureSecondaryGroupTab = useCallback((index: number): void => {
+    updateSecondaryGroup(index, (group) => {
+      if (group.tabs.length > 0) return group;
+      const tab = createTabFromPath('/dashboard');
+      return { tabs: [tab], activeKey: tab.key, draggingTabKey: undefined };
+    });
+  }, [updateSecondaryGroup]);
 
   useEffect(() => {
     setTabs((current) => current.map((tab) => {
@@ -1083,12 +1152,21 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
       const next = createTabFromPath(tab.path);
       return next.title === tab.title ? tab : { ...tab, title: next.title };
     }));
+    setSecondaryGroups((current) => current.map((group) => ({
+      ...group,
+      tabs: group.tabs.map((tab) => {
+        if (tab.titleSource === 'custom') return tab;
+        const next = createTabFromPath(tab.path);
+        return next.title === tab.title ? tab : { ...tab, title: next.title };
+      })
+    })));
   }, [tabNameMap]);
 
   useEffect(() => {
+    if (tabs.length === 0) return;
     const previous = previousActivePathRef.current;
     setTabs((current) => {
-      if (current.some((tab) => tab.key === activePath)) return current;
+      if (current.length === 0 || current.some((tab) => tab.key === activePath)) return current;
       const nextTab = createTabFromPath(activePath);
       if (location.state?.replaceTab && current.some((tab) => tab.key === previous)) {
         return current.map((tab) => tab.key === previous ? nextTab : tab);
@@ -1096,7 +1174,7 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
       return [...current, nextTab];
     });
     previousActivePathRef.current = activePath;
-  }, [activePath, location.state]);
+  }, [activePath, location.state, tabs.length]);
 
   useEffect(() => {
     writeJson(OPEN_TABS_STORAGE_KEY, tabs);
@@ -1106,13 +1184,49 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
     writeJson(SECONDARY_GROUPS_STORAGE_KEY, secondaryGroups);
   }, [secondaryGroups]);
 
+  useEffect(() => {
+    if (splitMode === 'vertical') ensureSecondaryGroupTab(0);
+    if (splitMode === 'grid') {
+      ensureSecondaryGroupTab(0);
+      ensureSecondaryGroupTab(1);
+    }
+  }, [ensureSecondaryGroupTab, splitMode]);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    const tab = createTabFromPath(openRequest.path);
+    if (openRequest.groupId === 'main') {
+      setTabs((current) => {
+        if (openRequest.replace && current.some((item) => item.key === activePath)) {
+          return current.map((item) => item.key === activePath ? tab : item);
+        }
+        if (current.some((item) => item.key === tab.key)) return current;
+        return [...current, tab];
+      });
+      navigate(tab.path);
+      onCurrentGroupChange('main');
+      onOpenRequestHandled();
+      return;
+    }
+    const index = Number(openRequest.groupId.replace('secondary-', ''));
+    updateSecondaryGroup(index, (group) => {
+      if (openRequest.replace && group.tabs.some((item) => item.key === group.activeKey)) {
+        return { ...group, tabs: group.tabs.map((item) => item.key === group.activeKey ? tab : item), activeKey: tab.key, draggingTabKey: undefined };
+      }
+      if (group.tabs.some((item) => item.key === tab.key)) return { ...group, activeKey: tab.key, draggingTabKey: undefined };
+      return { ...group, tabs: [...group.tabs, tab], activeKey: tab.key, draggingTabKey: undefined };
+    });
+    onCurrentGroupChange(openRequest.groupId);
+    onOpenRequestHandled();
+  }, [activePath, navigate, onCurrentGroupChange, onOpenRequestHandled, openRequest, updateSecondaryGroup]);
+
   const closeTab = (key: EditorTabKey): void => {
     setTabs((current) => {
       const next = current.filter((item) => item.key !== key);
-      if (key === activePath) {
-        navigate((next[next.length - 1] ?? createTabFromPath('/workspace/editor')).path);
+      if (key === activePath && next.length > 0) {
+        navigate(next[Math.max(0, current.findIndex((tab) => tab.key === key) - 1)]?.path ?? next[next.length - 1].path);
       }
-      return next.length > 0 ? next : [createTabFromPath('/workspace/editor')];
+      return next;
     });
   };
 
@@ -1132,25 +1246,79 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
     });
   };
 
+  const openPathInGroup = (groupId: EditorGroupId, path: string): void => {
+    const tab = createTabFromPath(path);
+    if (groupId === 'main') {
+      setTabs((current) => current.some((item) => item.key === tab.key) ? current : [...current, tab]);
+      navigate(tab.path);
+      onCurrentGroupChange('main');
+      return;
+    }
+    const index = Number(groupId.replace('secondary-', ''));
+    updateSecondaryGroup(index, (group) => {
+      if (group.tabs.some((item) => item.key === tab.key)) return { ...group, activeKey: tab.key, draggingTabKey: undefined };
+      return { ...group, tabs: [...group.tabs, tab], activeKey: tab.key, draggingTabKey: undefined };
+    });
+    onCurrentGroupChange(groupId);
+  };
+
+  const createBlankTabPath = (): string => {
+    newTabSequenceRef.current += 1;
+    return `/workspace/editor?untitled=${Date.now()}-${newTabSequenceRef.current}`;
+  };
+
+  const toggleSplitMode = (): void => {
+    const nextMode = splitMode === 'single' ? 'vertical' : splitMode === 'vertical' ? 'grid' : 'single';
+    if (nextMode === 'vertical') ensureSecondaryGroupTab(0);
+    if (nextMode === 'grid') {
+      ensureSecondaryGroupTab(0);
+      ensureSecondaryGroupTab(1);
+    }
+    onSplitModeChange(nextMode);
+  };
+
+  const createEditorActions = (groupId: EditorGroupId): ReactNode => (
+    <Space size={4}>
+      <Button size="small" icon={<SplitCellsOutlined />} onClick={toggleSplitMode}>分割</Button>
+      <Button size="small" icon={<PlusOutlined />} onClick={() => openPathInGroup(groupId, createBlankTabPath())}>新建</Button>
+    </Space>
+  );
+
   return (
-    <main className={`editor-area ${gridClass}`} aria-label="编辑器区域">
+    <main
+      ref={areaRef}
+      className={`editor-area ${gridClass} ${hasVisibleTabs ? '' : 'is-empty'}`}
+      style={{
+        '--editor-vertical-ratio': verticalRatio,
+        '--editor-grid-row-ratio': gridRowRatio,
+        '--editor-grid-column-ratio': gridColumnRatio
+      } as React.CSSProperties}
+      aria-label="编辑器区域"
+    >
+      {hasVisibleTabs ? null : (
+        <WorkbenchWelcome
+          actions={createEditorActions(currentGroupId)}
+        />
+      )}
+      {tabs.length > 0 && (
       <EditorGroup
         title="主编辑器组"
+        groupId="main"
         activeKey={activePath}
+        currentGroupId={currentGroupId}
         tabs={tabs}
         draggingTabKey={draggingTabKey}
-        onNavigate={navigate}
+        onFocusGroup={onCurrentGroupChange}
+        onNavigate={(path) => {
+          onCurrentGroupChange('main');
+          navigate(path);
+        }}
         onCloseTab={closeTab}
         onRenameTab={renameTab}
         onDragTabStart={setDraggingTabKey}
         onDragTabEnter={reorderTab}
         onDragTabEnd={() => setDraggingTabKey(undefined)}
-        actions={(
-          <Space size={4}>
-            <Button size="small" icon={<SplitCellsOutlined />} onClick={() => onSplitModeChange(splitMode === 'single' ? 'vertical' : splitMode === 'vertical' ? 'grid' : 'single')}>分割</Button>
-            <Button size="small" icon={<PlusOutlined />} onClick={() => navigate('/workspace/editor')}>新建</Button>
-          </Space>
-        )}
+        actions={createEditorActions('main')}
       >
         <Routes>
           <Route path="/" element={<Navigate to="/workspace/editor" replace />} />
@@ -1171,18 +1339,49 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
           <Route path="/settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>} />
         </Routes>
       </EditorGroup>
-      {secondaryCount >= 1 && (
-        <SecondaryEditorGroup
-          title="辅助编辑器组"
-          groupState={secondaryGroups[0]}
-          onGroupChange={(updater) => updateSecondaryGroup(0, updater)}
+      )}
+      {gridClass === 'grid-1x2' && visibleGroupCount >= 2 && (
+        <EditorSplitSash
+          direction="vertical"
+          areaRef={areaRef}
+          onRatioChange={onVerticalRatioChange}
         />
       )}
-      {secondaryCount >= 2 && (
+      {gridClass === 'grid-1-over-2' && (
+        <EditorSplitSash
+          direction="horizontal"
+          areaRef={areaRef}
+          onRatioChange={onGridRowRatioChange}
+        />
+      )}
+      {gridClass === 'grid-1-over-2' && secondaryGroups[0]?.tabs.length > 0 && secondaryGroups[1]?.tabs.length > 0 && (
+        <EditorSplitSash
+          direction="vertical"
+          areaRef={areaRef}
+          onRatioChange={onGridColumnRatioChange}
+          lowerOnly
+        />
+      )}
+      {secondaryCount >= 1 && secondaryGroups[0]?.tabs.length > 0 && (
+        <SecondaryEditorGroup
+          title="辅助编辑器组"
+          groupId="secondary-0"
+          currentGroupId={currentGroupId}
+          groupState={secondaryGroups[0]}
+          onCurrentGroupChange={onCurrentGroupChange}
+          onGroupChange={(updater) => updateSecondaryGroup(0, updater)}
+          actions={createEditorActions('secondary-0')}
+        />
+      )}
+      {secondaryCount >= 2 && secondaryGroups[1]?.tabs.length > 0 && (
         <SecondaryEditorGroup
           title="参考编辑器组"
+          groupId="secondary-1"
+          currentGroupId={currentGroupId}
           groupState={secondaryGroups[1]}
+          onCurrentGroupChange={onCurrentGroupChange}
           onGroupChange={(updater) => updateSecondaryGroup(1, updater)}
+          actions={createEditorActions('secondary-1')}
         />
       )}
     </main>
@@ -1250,33 +1449,36 @@ function renderPageContent(path: string): ReactNode {
 }
 
 function readSecondaryGroups(): SecondaryGroupState[] {
-  const stored = readJson<SecondaryGroupState[] | undefined>(SECONDARY_GROUPS_STORAGE_KEY, undefined);
+  const stored = readArray<SecondaryGroupState>(SECONDARY_GROUPS_STORAGE_KEY, []);
   const fallback: SecondaryGroupState[] = [
     { tabs: [createTabFromPath('/dashboard')], activeKey: '/dashboard' },
     { tabs: [createTabFromPath('/dashboard')], activeKey: '/dashboard' }
   ];
-  if (!Array.isArray(stored) || stored.length !== 2) return fallback;
   const sanitize = (group: unknown): SecondaryGroupState | undefined => {
     if (!group || typeof group !== 'object') return undefined;
     const candidate = group as Partial<SecondaryGroupState>;
-    if (!Array.isArray(candidate.tabs) || typeof candidate.activeKey !== 'string') return undefined;
+    if (!Array.isArray(candidate.tabs)) return undefined;
     const tabs = candidate.tabs.filter((tab): tab is EditorTab => Boolean(tab && typeof tab.key === 'string' && typeof tab.title === 'string' && typeof tab.path === 'string'));
-    if (tabs.length === 0) return undefined;
-    return { tabs, activeKey: tabs.some((tab) => tab.key === candidate.activeKey) ? candidate.activeKey : tabs[0].key, draggingTabKey: undefined };
+    return { tabs, activeKey: tabs.some((tab) => tab.key === candidate.activeKey) ? candidate.activeKey as string : tabs[0]?.key ?? '', draggingTabKey: undefined };
   };
   const first = sanitize(stored[0]) ?? fallback[0];
   const second = sanitize(stored[1]) ?? fallback[1];
   return [first, second];
 }
 
-function SecondaryEditorGroup({ title, groupState, onGroupChange }: {
+function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, actions, onCurrentGroupChange, onGroupChange }: {
   title: string;
+  groupId: EditorGroupId;
+  currentGroupId: EditorGroupId;
   groupState: SecondaryGroupState;
+  actions?: ReactNode;
+  onCurrentGroupChange: (groupId: EditorGroupId) => void;
   onGroupChange: (updater: (group: SecondaryGroupState) => SecondaryGroupState) => void;
 }): React.JSX.Element {
   const { tabs, activeKey, draggingTabKey } = groupState;
 
   const openTab = (path: string): void => {
+    onCurrentGroupChange(groupId);
     onGroupChange((group) => {
       if (group.tabs.some((tab) => tab.key === path)) return { ...group, activeKey: path, draggingTabKey: undefined };
       return { ...group, tabs: [...group.tabs, createTabFromPath(path)], activeKey: path, draggingTabKey: undefined };
@@ -1286,12 +1488,9 @@ function SecondaryEditorGroup({ title, groupState, onGroupChange }: {
   const closeTab = (key: EditorTabKey): void => {
     onGroupChange((group) => {
       const next = group.tabs.filter((tab) => tab.key !== key);
-      if (next.length === 0) {
-        const fresh = createTabFromPath('/dashboard');
-        return { tabs: [fresh], activeKey: fresh.key, draggingTabKey: undefined };
-      }
       let nextActive = group.activeKey;
-      if (key === group.activeKey) {
+      if (next.length === 0) nextActive = '';
+      if (key === group.activeKey && next.length > 0) {
         const removedIndex = group.tabs.findIndex((tab) => tab.key === key);
         const neighborIndex = Math.min(removedIndex, next.length - 1);
         nextActive = next[neighborIndex].key;
@@ -1328,19 +1527,31 @@ function SecondaryEditorGroup({ title, groupState, onGroupChange }: {
   return (
     <EditorGroup
       title={title}
+      groupId={groupId}
       activeKey={activeKey}
+      currentGroupId={currentGroupId}
       tabs={tabs}
       draggingTabKey={draggingTabKey}
-      onNavigate={(path) => onGroupChange((group) => ({ ...group, activeKey: path }))}
+      onFocusGroup={onCurrentGroupChange}
+      onNavigate={(path) => {
+        onCurrentGroupChange(groupId);
+        onGroupChange((group) => {
+          if (group.tabs.some((tab) => tab.key === path)) return { ...group, activeKey: path, draggingTabKey: undefined };
+          return { ...group, tabs: [...group.tabs, createTabFromPath(path)], activeKey: path, draggingTabKey: undefined };
+        });
+      }}
       onCloseTab={closeTab}
       onRenameTab={renameTab}
       onDragTabStart={(key) => onGroupChange((group) => ({ ...group, draggingTabKey: key }))}
       onDragTabEnter={reorderTab}
       onDragTabEnd={() => onGroupChange((group) => ({ ...group, draggingTabKey: undefined }))}
       actions={(
-        <Dropdown menu={openMenu} trigger={['click']}>
-          <Button size="small" icon={<PlusOutlined />}>打开</Button>
-        </Dropdown>
+        <Space size={4}>
+          {actions}
+          <Dropdown menu={openMenu} trigger={['click']}>
+            <Button size="small" icon={<MoreOutlined />}>打开</Button>
+          </Dropdown>
+        </Space>
       )}
     >
       {renderPageContent(activeKey)}
@@ -1350,11 +1561,14 @@ function SecondaryEditorGroup({ title, groupState, onGroupChange }: {
 
 function EditorGroup({
   title,
+  groupId,
   activeKey,
+  currentGroupId,
   tabs,
   draggingTabKey,
   actions,
   children,
+  onFocusGroup,
   onNavigate,
   onCloseTab,
   onRenameTab,
@@ -1363,11 +1577,14 @@ function EditorGroup({
   onDragTabEnd
 }: {
   title: string;
+  groupId: EditorGroupId;
   activeKey: string;
+  currentGroupId: EditorGroupId;
   tabs: EditorTab[];
   draggingTabKey?: string;
   actions?: ReactNode;
   children: ReactNode;
+  onFocusGroup: (groupId: EditorGroupId) => void;
   onNavigate: (path: string) => void;
   onCloseTab?: (key: EditorTabKey) => void;
   onRenameTab?: (key: EditorTabKey, title: string) => void;
@@ -1407,7 +1624,12 @@ function EditorGroup({
   };
 
   return (
-    <section className="editor-group" aria-label={title}>
+    <section
+      className={`editor-group ${currentGroupId === groupId ? 'is-current' : ''}`}
+      aria-label={title}
+      onMouseDownCapture={() => onFocusGroup(groupId)}
+      onFocus={() => onFocusGroup(groupId)}
+    >
       <div className="editor-tabbar">
         <div
           className="editor-tabs"
@@ -1467,7 +1689,23 @@ function EditorGroup({
         </div>
         <div className="editor-actions">{actions}</div>
       </div>
-      <div className="editor-content">{children}</div>
+      <div
+        className="editor-content"
+        onClickCapture={(event) => {
+          const target = event.target as HTMLElement;
+          const directLink = target.closest('a[href]');
+          const buttonLink = target.closest('button')?.querySelector('a[href]');
+          const link = directLink ?? buttonLink;
+          if (!(link instanceof HTMLAnchorElement)) return;
+          const href = link.getAttribute('href') ?? '';
+          const path = href.startsWith('#/') ? href.slice(1) : href.startsWith('/') ? href : undefined;
+          if (!path) return;
+          event.preventDefault();
+          onNavigate(path);
+        }}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -1592,6 +1830,51 @@ function StatusBar({
   );
 }
 
+function EditorSplitSash({
+  direction,
+  areaRef,
+  onRatioChange,
+  lowerOnly = false
+}: {
+  direction: 'vertical' | 'horizontal';
+  areaRef: React.RefObject<HTMLElement>;
+  onRatioChange: (ratio: number) => void;
+  lowerOnly?: boolean;
+}): React.JSX.Element {
+  const onMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const area = areaRef.current;
+    if (!area) return;
+    const rect = area.getBoundingClientRect();
+    document.body.classList.add('is-resizing');
+
+    const onMove = (moveEvent: MouseEvent): void => {
+      const raw = direction === 'vertical'
+        ? (moveEvent.clientX - rect.left) / rect.width
+        : (moveEvent.clientY - rect.top) / rect.height;
+      onRatioChange(Math.min(Math.max(raw, 0.24), 0.76));
+    };
+
+    const onUp = (): void => {
+      document.body.classList.remove('is-resizing');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [areaRef, direction, onRatioChange]);
+
+  return (
+    <div
+      className={`editor-split-sash editor-split-sash-${direction} ${lowerOnly ? 'is-lower-only' : ''}`}
+      role="separator"
+      aria-orientation={direction === 'vertical' ? 'vertical' : 'horizontal'}
+      onMouseDown={onMouseDown}
+    />
+  );
+}
+
 function Sash({ direction, minSize, maxSize, defaultSize, currentSize, onChange, onReset, className }: SashProps): React.JSX.Element {
   const frameRef = useRef<number>();
   const effectiveSize = Number.isFinite(currentSize) ? currentSize : defaultSize;
@@ -1640,12 +1923,14 @@ function Sash({ direction, minSize, maxSize, defaultSize, currentSize, onChange,
   );
 }
 
-function WorkbenchWelcome({ compact = false }: { compact?: boolean }): React.JSX.Element {
+function WorkbenchWelcome({ compact = false, actions }: { compact?: boolean; actions?: ReactNode }): React.JSX.Element {
   return (
     <div className={`workbench-welcome ${compact ? 'compact' : ''}`}>
-      <CodeOutlined />
-      <Typography.Title level={compact ? 4 : 3}>可分割编辑器组</Typography.Title>
-      <Typography.Paragraph type="secondary">拖拽 Tab 到边缘可扩展为分栏；Ctrl+\ 切换分割，Ctrl+B 切换侧栏，Ctrl+J 切换底部面板。</Typography.Paragraph>
+      <div className="workbench-watermark" aria-hidden="true">Hetu</div>
+      <Typography.Text className="workbench-welcome-kicker">Creative Workbench</Typography.Text>
+      <Typography.Title level={compact ? 4 : 2}>HetuSketch</Typography.Title>
+      <Typography.Paragraph type="secondary">文思如涌，下笔千言</Typography.Paragraph>
+      {actions}
     </div>
   );
 }

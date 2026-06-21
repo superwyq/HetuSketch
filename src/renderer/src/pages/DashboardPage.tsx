@@ -90,7 +90,7 @@ export function DashboardPage(): React.JSX.Element {
           <Typography.Text className="eyebrow">创作工作台与桌面体验</Typography.Text>
           <Typography.Title>河图速写创作助手</Typography.Title>
           <Typography.Paragraph>
-            围绕“设定集 → 作品 → 数据库 → 创作正文”的结构化创作工作台。当前作品：{selectedProject?.name ?? '尚未选择'}。
+            当前作品：《{selectedProject?.name ?? '尚未选择'}》
           </Typography.Paragraph>
           <Space wrap>
             <Button type="primary" icon={<BookOutlined />}><Link to="/data/characters">打开角色数据管理</Link></Button>
