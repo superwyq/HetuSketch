@@ -410,7 +410,7 @@ AI 服务负责：
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                        TitleBar                              │  38px
+│                        TitleBar                              │  32px
 ├──┬──────────────┬─┬──────────────────────────┬─┬────────────┤
 │  │              │ │                          │ │            │
 │  │              │ │                          │ │            │
@@ -440,6 +440,8 @@ AI 服务负责：
 - **BottomPanel**：AI 提示/角色条目/世界观设定/线索条目/输出五个 Tab。
 - **StatusBar**：底部状态条，显示当前作品、光标位置、字数、面板/侧栏状态。
 - **Sash**：可拖拽分隔条，双击复位，Alt+方向键微调。
+
+**设计令牌体系**：渲染端样式基于 `src/renderer/assets/styles/tokens/` 下的语义令牌体系，所有颜色/字体/阴影/圆角通过 CSS 变量引用。深色模式为默认基调（`--color-background: #0A0A0A`），浅色模式通过 `.theme-light` 类覆盖（`--color-background: #F5F5F5`）。工作台每个分区（ActivityBar/PrimarySidebar/SecondarySidebar/BottomPanel/TitleBar/StatusBar）拥有专属颜色令牌，禁止跨分区复用。实体识别色（角色/世界观/伏笔）和校验风险色（pass/notice/warning/critical/unknown）作为 HetuSketch 核心设计语义贯穿整个界面。
 
 ### 8.2 页面模块
 

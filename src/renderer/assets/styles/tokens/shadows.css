@@ -1,0 +1,17 @@
+/**
+ * HetuSketch Design Tokens — Shadows
+ *
+ * 7 levels (see docs/DESIGN.md §7). Shadows are reserved for interaction
+ * feedback (hover) and floating elements — never for static depth, which is
+ * expressed via surface color layering.
+ */
+
+:root {
+  --shadow-2xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-xs: 0 2px 4px 0 rgb(0 0 0 / 0.06);
+  --shadow-sm: 0 2px 8px -2px rgb(0 0 0 / 0.08);
+  --shadow-md: 0 4px 12px -2px rgb(0 0 0 / 0.10);
+  --shadow-lg: 0 8px 24px -4px rgb(0 0 0 / 0.12);
+  --shadow-xl: 0 16px 40px -8px rgb(0 0 0 / 0.16);
+  --shadow-2xl: 0 24px 56px -12px rgb(0 0 0 / 0.20);
+}

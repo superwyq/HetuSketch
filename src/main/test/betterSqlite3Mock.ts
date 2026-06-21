@@ -91,7 +91,21 @@ class MockDatabase {
         if (!(column in row)) row[column] = null;
       }
 
-      const existing = row.id !== undefined ? table.rows.find((item) => item.id === row.id) : undefined;
+      // 解析 ON CONFLICT(col) DO UPDATE 子句，按冲突列判断 upsert
+      const conflictMatch = sql.match(/ON\s+CONFLICT\s*\(([^)]+)\)/i);
+      const conflictColumns = conflictMatch
+        ? conflictMatch[1].split(',').map((c) => normalizeName(c.trim()))
+        : [];
+
+      let existing: MockRow | undefined;
+      if (conflictColumns.length > 0) {
+        existing = table.rows.find((item) =>
+          conflictColumns.every((col) => String(item[col]) === String(row[col]))
+        );
+      } else if (row.id !== undefined) {
+        existing = table.rows.find((item) => item.id === row.id);
+      }
+
       if (existing) {
         Object.assign(existing, row);
         return { changes: 1, lastInsertRowid: table.rows.indexOf(existing) + 1 };

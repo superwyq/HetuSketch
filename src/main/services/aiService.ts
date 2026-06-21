@@ -4,14 +4,20 @@ import type {
   AiAgentResponse,
   AiConfig,
   AiConfigSaveInput,
+  AgentConfig,
+  AgentReorderInput,
+  AgentSaveInput,
   AiPromptConfig,
   AiPromptSaveInput,
+  AiProvider,
   AiSkillConfig,
   AiSkillSaveInput,
+  AiStreamChunk,
   AiValidationRequest,
   AiValidationResult,
   HttpToolConfig,
   HttpToolSaveInput,
+  ModelInfo,
   RagBuildResult,
   RagQueryRequest,
   RagQueryResult,
@@ -24,6 +30,18 @@ import type {
 } from '../../shared/storageTypes.js';
 import type { IndexDatabase, VectorChunkInput } from './indexDatabase.js';
 import type { ProjectFileStore } from './projectFileStore.js';
+import {
+  buildLlmRequest,
+  buildEmbeddingRequest,
+  buildModelListRequest,
+  isSseProvider,
+  parseEmbeddingResponse,
+  parseLlmResponse,
+  parseModelListResponse,
+  parseStreamChunk,
+  type LlmMessage,
+  type LlmRequestConfig
+} from './aiCore/providerAdapter.js';
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -32,16 +50,16 @@ export interface AiServiceOptions {
   encryptionScope?: string;
 }
 
-interface LlmMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
 interface LlmJsonResult {
   content: string;
   provider: string;
   model: string;
   latencyMs: number;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  };
 }
 
 const DEFAULT_GLOBAL_PROMPT = '你是 HetuSketch 的小说设定逻辑校验助手。只提供校验、提醒、补全建议，不代写正文。输出必须是可解析 JSON。';
@@ -59,6 +77,57 @@ const DEFAULT_SKILLS: AiSkillConfig[] = [
   { id: 'setting_completion', name: '设定补全', description: '生成结构化设定字段建议', enabled: true, builtIn: true },
   { id: 'foreshadowing', name: '伏笔提醒', description: '提示未回收伏笔和相关风险', enabled: true, builtIn: true },
   { id: 'http_tools', name: 'HTTP 工具调用', description: '允许调用用户显式注册的 HTTP 回调工具', enabled: false, builtIn: true }
+];
+
+const DEFAULT_AGENTS: AgentConfig[] = [
+  {
+    id: 'agent-logic-check',
+    name: '逻辑校验',
+    description: '检查文本中的逻辑冲突与设定矛盾',
+    systemPrompt: '',
+    scenarios: { logic_check: DEFAULT_SCENARIO_PROMPTS.logic_check },
+    model: '',
+    temperature: 0.2,
+    topP: 0.9,
+    maxTokens: 1000,
+    enabledSkills: [],
+    enabledTools: [],
+    order: 0,
+    builtIn: true,
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'agent-setting-completion',
+    name: '设定补全',
+    description: '基于已有设定补全角色/世界观细节',
+    systemPrompt: '',
+    scenarios: { setting_completion: DEFAULT_SCENARIO_PROMPTS.setting_completion },
+    model: '',
+    temperature: 0.4,
+    topP: 0.9,
+    maxTokens: 1500,
+    enabledSkills: [],
+    enabledTools: [],
+    order: 1,
+    builtIn: true,
+    updatedAt: new Date().toISOString()
+  },
+  {
+    id: 'agent-rag-qa',
+    name: 'RAG 问答',
+    description: '基于向量检索的回答与素材查询',
+    systemPrompt: '',
+    scenarios: { rag_qa: DEFAULT_SCENARIO_PROMPTS.rag_qa },
+    model: '',
+    temperature: 0.3,
+    topP: 0.9,
+    maxTokens: 1000,
+    enabledSkills: ['rag_search'],
+    enabledTools: [],
+    order: 2,
+    builtIn: true,
+    updatedAt: new Date().toISOString()
+  }
 ];
 
 export class AiService {
@@ -173,6 +242,94 @@ export class AiService {
     this.indexDb.deleteHttpTool(sanitizeId(toolId));
   }
 
+  listAgents(): AgentConfig[] {
+    const stored = safeJson<AgentConfig[]>(this.indexDb.getConfigRecord('agents') ?? '[]') ?? [];
+    // Ensure default agents exist
+    const defaults = DEFAULT_AGENTS;
+    const byId = new Map(stored.map((a) => [a.id, a]));
+    for (const def of defaults) {
+      if (!byId.has(def.id)) {
+        byId.set(def.id, def);
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => a.order - b.order);
+  }
+
+  getAgent(id: string): AgentConfig | null {
+    return this.listAgents().find((a) => a.id === id) ?? null;
+  }
+
+  createAgent(input: AgentSaveInput): AgentConfig {
+    const agents = this.listAgents();
+    const id = input.id ? sanitizeId(input.id) : randomUUID();
+    const now = new Date().toISOString();
+    const agent: AgentConfig = {
+      id,
+      name: input.name.trim(),
+      description: input.description?.trim() ?? '',
+      systemPrompt: input.systemPrompt ?? '',
+      scenarios: input.scenarios ?? {},
+      model: input.model ?? '',
+      temperature: input.temperature ?? 0.2,
+      topP: input.topP ?? 0.9,
+      maxTokens: input.maxTokens ?? 1000,
+      enabledSkills: input.enabledSkills ?? [],
+      enabledTools: input.enabledTools ?? [],
+      order: input.order ?? agents.length,
+      builtIn: false,
+      updatedAt: now
+    };
+    this.saveAgents([...agents, agent]);
+    return agent;
+  }
+
+  updateAgent(input: AgentSaveInput): AgentConfig {
+    if (!input.id) throw new Error('Agent id required');
+    const agents = this.listAgents();
+    const idx = agents.findIndex((a) => a.id === input.id);
+    if (idx === -1) throw new Error(`Agent ${input.id} not found`);
+    const existing = agents[idx];
+    const updated: AgentConfig = {
+      ...existing,
+      name: input.name?.trim() ?? existing.name,
+      description: input.description?.trim() ?? existing.description,
+      systemPrompt: input.systemPrompt ?? existing.systemPrompt,
+      scenarios: { ...existing.scenarios, ...(input.scenarios ?? {}) },
+      model: input.model ?? existing.model,
+      temperature: input.temperature ?? existing.temperature,
+      topP: input.topP ?? existing.topP,
+      maxTokens: input.maxTokens ?? existing.maxTokens,
+      enabledSkills: input.enabledSkills ?? existing.enabledSkills,
+      enabledTools: input.enabledTools ?? existing.enabledTools,
+      updatedAt: new Date().toISOString()
+    };
+    agents[idx] = updated;
+    this.saveAgents(agents);
+    return updated;
+  }
+
+  deleteAgent(id: string): void {
+    const agents = this.listAgents();
+    const target = agents.find((a) => a.id === id);
+    if (target?.builtIn) throw new Error('内置智能体不可删除');
+    this.saveAgents(agents.filter((a) => a.id !== id));
+  }
+
+  reorderAgents(input: AgentReorderInput[]): AgentConfig[] {
+    const agents = this.listAgents();
+    const orderMap = new Map(input.map((i) => [i.id, i.order]));
+    const reordered = agents.map((a) => ({ ...a, order: orderMap.get(a.id) ?? a.order }));
+    reordered.sort((a, b) => a.order - b.order);
+    // Re-assign sequential order
+    reordered.forEach((a, i) => { a.order = i; });
+    this.saveAgents(reordered);
+    return reordered;
+  }
+
+  private saveAgents(agents: AgentConfig[]): void {
+    this.indexDb.setConfigRecord('agents', JSON.stringify(agents));
+  }
+
   async testConnection(kind: 'llm' | 'embedding'): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
     const config = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
     if (!config.enabled || !config.apiKeySet) {
@@ -189,6 +346,36 @@ export class AiService {
       return { ok: vector.length > 0, message: '连接成功', provider: config.provider, model: config.model };
     } catch (error) {
       return { ok: false, message: summarizeError(error), provider: config.provider, model: config.model };
+    }
+  }
+
+  async listModels(kind: 'llm' | 'embedding'): Promise<ModelInfo[]> {
+    const config = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
+    if (!config.enabled || !config.apiKeySet) {
+      return [];
+    }
+    const apiKey = this.decryptApiKey(kind === 'llm' ? 'ai.llm' : 'ai.embedding');
+    if (!apiKey) return [];
+
+    const requestConfig: LlmRequestConfig = {
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey
+    };
+    const { url, headers } = buildModelListRequest(requestConfig);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
+    try {
+      const response = await this.fetchImpl(url, { method: 'GET', headers, signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+      }
+      const json = await response.json() as Record<string, unknown>;
+      return parseModelListResponse(config.provider, json);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -296,13 +483,16 @@ export class AiService {
   async enhancedValidation(request: AiValidationRequest, basic: ValidationResult): Promise<AiAgentResponse<AiValidationResult>> {
     const started = Date.now();
     const prompts = this.getPrompts();
-    const contexts = await this.ragQuery({
-      projectId: request.projectId,
-      query: request.text.slice(0, 2_000),
-      topK: request.topK ?? 5,
-      retrievalMode: request.retrievalMode ?? 'hybrid',
-      maxContextChars: 6_000
-    });
+    const ragEnabled = this.isSkillEnabled('rag_search');
+    const contexts = ragEnabled
+      ? await this.ragQuery({
+          projectId: request.projectId,
+          query: request.text.slice(0, 2_000),
+          topK: request.topK ?? 5,
+          retrievalMode: request.retrievalMode ?? 'hybrid',
+          maxContextChars: 6_000
+        })
+      : { status: 'ok' as const, query: request.text.slice(0, 2_000), contexts: [] as RetrievedContext[], warnings: ['RAG 检索技能已禁用，跳过设定召回'] };
 
     if (!this.canUseLlm()) {
       return {
@@ -326,7 +516,7 @@ export class AiService {
         status: 'ok',
         warnings: contexts.warnings,
         evidence: contexts.contexts,
-        usage: { provider: result.provider, model: result.model, latencyMs: Date.now() - started },
+        usage: { provider: result.provider, model: result.model, latencyMs: Date.now() - started, promptTokens: result.usage?.promptTokens, completionTokens: result.usage?.completionTokens },
         data: { validation: basic, aiFindings, mergedFindings: [...basic.findings, ...aiFindings] }
       };
     } catch (error) {
@@ -342,13 +532,20 @@ export class AiService {
   }
 
   async completeSetting(request: SettingCompletionRequest): Promise<AiAgentResponse<SettingCompletionResult>> {
-    const contexts = await this.ragQuery({ projectId: request.projectId, query: request.draft, topK: request.topK ?? 5, retrievalMode: 'hybrid', maxContextChars: 5_000 });
+    if (!this.isSkillEnabled('setting_completion')) {
+      return degradedAgentResponse(request.requestId, '设定补全技能已禁用', []);
+    }
+    const ragEnabled = this.isSkillEnabled('rag_search');
+    const contexts = ragEnabled
+      ? await this.ragQuery({ projectId: request.projectId, query: request.draft, topK: request.topK ?? 5, retrievalMode: 'hybrid', maxContextChars: 5_000 })
+      : { status: 'ok' as const, query: request.draft, contexts: [] as RetrievedContext[], warnings: ['RAG 检索技能已禁用'] };
     if (!this.canUseLlm()) {
       return degradedAgentResponse(request.requestId, 'LLM 未配置，无法执行设定补全', contexts.contexts);
     }
 
     try {
       const prompts = this.getPrompts();
+      const started = Date.now();
       const result = await this.callLlm([
         { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.setting_completion}` },
         { role: 'user', content: JSON.stringify({ entityType: request.entityType, draft: request.draft, existingFields: request.existingFields ?? {}, contexts: contexts.contexts }) }
@@ -359,31 +556,83 @@ export class AiService {
         possibleConflicts: [],
         adoptionMode: 'manual_review_required'
       };
-      return { requestId: request.requestId ?? randomUUID(), status: 'ok', warnings: contexts.warnings, evidence: contexts.contexts, data };
+      return { requestId: request.requestId ?? randomUUID(), status: 'ok', warnings: contexts.warnings, evidence: contexts.contexts, usage: { provider: result.provider, model: result.model, latencyMs: Date.now() - started, promptTokens: result.usage?.promptTokens, completionTokens: result.usage?.completionTokens }, data };
     } catch (error) {
       return errorAgentResponse(request.requestId, summarizeError(error), contexts.contexts);
     }
   }
 
   async foreshadowingReminder(projectId: string, text: string, requestId?: string): Promise<AiAgentResponse<{ reminders: ValidationFinding[] }>> {
-    const contexts = await this.ragQuery({ projectId, query: text, filters: { entityTypes: ['plot'] }, topK: 8, retrievalMode: 'hybrid', maxContextChars: 4_000 });
-    const reminders = contexts.contexts.map((context) => ({
-      id: randomUUID(),
-      category: 'plot-reminder' as const,
-      severity: 'info' as const,
-      entryId: context.id,
-      entryType: 'plot' as const,
-      title: context.title,
-      rule: '相关未回收伏笔',
-      message: `文本可能关联伏笔“${context.title}”，请确认是否需要推进或回收。`,
-      suggestion: '如已经回收，请更新伏笔状态；如只是重复提及，请确认后续回收计划。',
-      excerpt: context.snippet
-    }));
-    return { requestId: requestId ?? randomUUID(), status: contexts.warnings.length ? 'degraded' : 'ok', warnings: contexts.warnings, evidence: contexts.contexts, data: { reminders } };
+    if (!this.isSkillEnabled('foreshadowing')) {
+      return {
+        requestId: requestId ?? randomUUID(),
+        status: 'ok',
+        warnings: ['伏笔提醒技能已禁用'],
+        evidence: [],
+        data: { reminders: [] }
+      };
+    }
+
+    const contexts = await this.ragQuery({
+      projectId,
+      query: text.slice(0, 2_000),
+      filters: { entityTypes: ['plot'] },
+      topK: 8,
+      retrievalMode: 'hybrid',
+      maxContextChars: 4_000
+    });
+
+    if (!this.canUseLlm()) {
+      const reminders = contexts.contexts.map((context) => ({
+        id: randomUUID(),
+        category: 'plot-reminder' as const,
+        severity: 'info' as const,
+        entryId: context.id,
+        entryType: 'plot' as const,
+        title: context.title,
+        rule: '相关未回收伏笔',
+        message: `文本可能关联伏笔“${context.title}”，请确认是否需要推进或回收。`,
+        suggestion: '如已经回收，请更新伏笔状态；如只是重复提及，请确认后续回收计划。',
+        excerpt: context.snippet
+      }));
+      return {
+        requestId: requestId ?? randomUUID(),
+        status: contexts.warnings.length ? 'degraded' : 'ok',
+        warnings: ['LLM 未配置，仅返回 RAG 检索的伏笔提醒', ...contexts.warnings],
+        evidence: contexts.contexts,
+        data: { reminders }
+      };
+    }
+
+    try {
+      const prompts = this.getPrompts();
+      const result = await this.callLlm([
+        { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.foreshadowing}` },
+        { role: 'user', content: JSON.stringify({ text: text.slice(0, 20_000), contexts: contexts.contexts }) }
+      ]);
+      const parsed = extractJson<{ reminders?: Partial<ValidationFinding>[] }>(result.content);
+      const reminders = normalizeAiFindings(parsed?.reminders ?? []).map((r) => ({
+        ...r,
+        category: 'plot-reminder' as const
+      }));
+      return {
+        requestId: requestId ?? randomUUID(),
+        status: 'ok',
+        warnings: contexts.warnings,
+        evidence: contexts.contexts,
+        usage: { provider: result.provider, model: result.model, promptTokens: result.usage?.promptTokens, completionTokens: result.usage?.completionTokens, latencyMs: result.latencyMs },
+        data: { reminders }
+      };
+    } catch (error) {
+      return errorAgentResponse(requestId, summarizeError(error), contexts.contexts);
+    }
   }
 
   async ragAnswer(request: RagQueryRequest): Promise<AiAgentResponse<{ answer: string; citations: RetrievedContext[] }>> {
-    const contexts = await this.ragQuery(request);
+    const ragEnabled = this.isSkillEnabled('rag_search');
+    const contexts = ragEnabled
+      ? await this.ragQuery(request)
+      : { status: 'ok' as const, query: request.query, contexts: [] as RetrievedContext[], warnings: ['RAG 检索技能已禁用，仅基于 LLM 自身知识回答'] };
     if (!this.canUseLlm()) {
       return {
         requestId: request.requestId ?? randomUUID(),
@@ -396,6 +645,7 @@ export class AiService {
 
     try {
       const prompts = this.getPrompts();
+      const started = Date.now();
       const result = await this.callLlm([
         { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.rag_qa}` },
         { role: 'user', content: JSON.stringify({ question: request.query, contexts: contexts.contexts }) }
@@ -406,6 +656,7 @@ export class AiService {
         status: 'ok',
         warnings: contexts.warnings,
         evidence: contexts.contexts,
+        usage: { provider: result.provider, model: result.model, latencyMs: Date.now() - started, promptTokens: result.usage?.promptTokens, completionTokens: result.usage?.completionTokens },
         data: { answer: parsed?.answer || result.content, citations: contexts.contexts }
       };
     } catch (error) {
@@ -413,9 +664,108 @@ export class AiService {
     }
   }
 
+  async *streamValidation(request: AiValidationRequest, basic: ValidationResult): AsyncGenerator<AiStreamChunk> {
+    const contexts = this.isSkillEnabled('rag_search')
+      ? await this.ragQuery({
+          projectId: request.projectId,
+          query: request.text.slice(0, 2_000),
+          topK: request.topK ?? 5,
+          retrievalMode: request.retrievalMode ?? 'hybrid',
+          maxContextChars: 6_000
+        })
+      : { status: 'ok' as const, query: request.text.slice(0, 2_000), contexts: [] as RetrievedContext[], warnings: [] as string[] };
+
+    if (!this.canUseLlm()) {
+      yield { type: 'error', error: 'LLM 未配置' };
+      return;
+    }
+
+    const prompts = this.getPrompts();
+    for await (const chunk of this.callLlmStream(
+      [
+        { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.logic_check}` },
+        { role: 'user', content: JSON.stringify({ text: request.text.slice(0, 20_000), basicFindings: basic.findings, contexts: contexts.contexts }) }
+      ],
+      { maxTokens: 2_000 }
+    )) {
+      yield chunk;
+    }
+  }
+
+  async *streamRagAnswer(request: RagQueryRequest): AsyncGenerator<AiStreamChunk> {
+    const contexts = this.isSkillEnabled('rag_search')
+      ? await this.ragQuery(request)
+      : { status: 'ok' as const, query: request.query, contexts: [] as RetrievedContext[], warnings: [] as string[] };
+
+    if (!this.canUseLlm()) {
+      yield { type: 'error', error: 'LLM 未配置' };
+      return;
+    }
+
+    const prompts = this.getPrompts();
+    for await (const chunk of this.callLlmStream(
+      [
+        { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.rag_qa}` },
+        { role: 'user', content: JSON.stringify({ question: request.query, contexts: contexts.contexts }) }
+      ],
+      { maxTokens: 2_000 }
+    )) {
+      yield chunk;
+    }
+  }
+
+  async *streamCompleteSetting(request: SettingCompletionRequest): AsyncGenerator<AiStreamChunk> {
+    if (!this.isSkillEnabled('setting_completion')) {
+      yield { type: 'error', error: '设定补全技能已禁用' };
+      return;
+    }
+    const contexts = this.isSkillEnabled('rag_search')
+      ? await this.ragQuery({ projectId: request.projectId, query: request.draft, topK: request.topK ?? 5, retrievalMode: 'hybrid', maxContextChars: 5_000 })
+      : { status: 'ok' as const, query: request.draft, contexts: [] as RetrievedContext[], warnings: [] as string[] };
+
+    if (!this.canUseLlm()) {
+      yield { type: 'error', error: 'LLM 未配置' };
+      return;
+    }
+
+    const prompts = this.getPrompts();
+    for await (const chunk of this.callLlmStream(
+      [
+        { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.setting_completion}` },
+        { role: 'user', content: JSON.stringify({ entityType: request.entityType, draft: request.draft, existingFields: request.existingFields ?? {}, contexts: contexts.contexts }) }
+      ],
+      { maxTokens: 2_000 }
+    )) {
+      yield chunk;
+    }
+  }
+
+  async *streamForeshadowingReminder(projectId: string, text: string, _requestId?: string): AsyncGenerator<AiStreamChunk> {
+    if (!this.isSkillEnabled('foreshadowing')) {
+      yield { type: 'error', error: '伏笔提醒技能已禁用' };
+      return;
+    }
+    const contexts = await this.ragQuery({ projectId, query: text.slice(0, 2_000), filters: { entityTypes: ['plot'] }, topK: 8, retrievalMode: 'hybrid', maxContextChars: 4_000 });
+    if (!this.canUseLlm()) {
+      yield { type: 'error', error: 'LLM 未配置' };
+      return;
+    }
+    const prompts = this.getPrompts();
+    for await (const chunk of this.callLlmStream([
+      { role: 'system', content: `${prompts.globalSystemPrompt}\n${prompts.scenarios.foreshadowing}` },
+      { role: 'user', content: JSON.stringify({ text: text.slice(0, 20_000), contexts: contexts.contexts }) }
+    ], { maxTokens: 2_000 })) {
+      yield chunk;
+    }
+  }
+
   private canUseLlm(): boolean {
     const config = this.getConfig().llm;
     return config.enabled && config.apiKeySet;
+  }
+
+  private isSkillEnabled(skillId: string): boolean {
+    return this.listSkills().some((s) => s.id === skillId && s.enabled);
   }
 
   private mergeModelConfig(key: string, input: NonNullable<AiConfigSaveInput['llm']>): Record<string, unknown> {
@@ -428,6 +778,16 @@ export class AiService {
       model: input.model?.trim() || existing.model,
       timeoutMs: clampNumber(input.timeoutMs, 1_000, 120_000, Number(existing.timeoutMs ?? 30_000))
     };
+
+    if (input.temperature !== undefined) {
+      next.temperature = clampNumber(input.temperature, 0, 2, 0.2);
+    }
+    if (input.topP !== undefined) {
+      next.topP = clampNumber(input.topP, 0, 1, 0.9);
+    }
+    if (input.maxTokens !== undefined) {
+      next.maxTokens = clampNumber(input.maxTokens, 1, 32_000, 1_000);
+    }
 
     if (input.apiKey !== undefined) {
       next.encryptedApiKey = input.apiKey ? encrypt(input.apiKey, this.keyMaterial) : '';
@@ -443,41 +803,265 @@ export class AiService {
       throw new Error('LLM 未配置');
     }
 
+    const tools = this.buildHttpTools();
+    if (tools.length > 0 && isOpenAiCompatibleProvider(config.provider)) {
+      return this.callLlmWithTools(messages, options, tools);
+    }
+
     const started = Date.now();
-    const timeoutMs = config.timeoutMs ?? 30_000;
+    const requestConfig: LlmRequestConfig = {
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey,
+      temperature: config.temperature,
+      topP: config.topP,
+      maxTokens: options.maxTokens ?? config.maxTokens,
+      timeoutMs: config.timeoutMs
+    };
+
+    const { url, headers, body } = buildLlmRequest(requestConfig, messages, false);
+
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
 
     try {
-      if (config.provider === 'anthropic') {
-        const system = messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
-        const userMessages = messages.filter((message) => message.role !== 'system');
-        const response = await this.fetchImpl(joinUrl(config.baseUrl, '/messages'), {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01'
-          },
-          body: JSON.stringify({ model: config.model, system, messages: userMessages, max_tokens: options.maxTokens ?? 1_000 }),
-          signal: controller.signal
-        });
-        const json = await parseJsonResponse(response);
-        const content = Array.isArray(json.content) ? json.content.map((item: { text?: string }) => item.text ?? '').join('\n') : '';
-        return { content, provider: config.provider, model: config.model, latencyMs: Date.now() - started };
-      }
-
-      const response = await this.fetchImpl(joinUrl(config.baseUrl, '/chat/completions'), {
+      const response = await this.fetchImpl(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: config.model, messages, temperature: 0.2, max_tokens: options.maxTokens ?? 1_000 }),
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
         signal: controller.signal
       });
       const json = await parseJsonResponse(response);
-      return { content: json.choices?.[0]?.message?.content ?? '', provider: config.provider, model: config.model, latencyMs: Date.now() - started };
+      const parsed = parseLlmResponse(config.provider, json);
+      return { content: parsed.content, provider: config.provider, model: config.model, latencyMs: Date.now() - started, usage: parsed.usage };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private async *callLlmStream(messages: LlmMessage[], options: { maxTokens?: number } = {}): AsyncGenerator<AiStreamChunk> {
+    const config = this.getConfig().llm;
+    const apiKey = this.decryptApiKey('ai.llm');
+    if (!config.enabled || !apiKey) {
+      throw new Error('LLM 未配置');
+    }
+
+    const requestConfig: LlmRequestConfig = {
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey,
+      temperature: config.temperature,
+      topP: config.topP,
+      maxTokens: options.maxTokens ?? config.maxTokens,
+      timeoutMs: config.timeoutMs
+    };
+
+    const { url, headers, body } = buildLlmRequest(requestConfig, messages, true);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
+
+    try {
+      const response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取流式响应');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const sse = isSseProvider(config.provider);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let data: string;
+          if (sse) {
+            if (!trimmed.startsWith('data:')) continue;
+            data = trimmed.slice(5).trim();
+            if (data === '[DONE]') {
+              yield { type: 'finish' };
+              return;
+            }
+          } else {
+            data = trimmed;
+          }
+          const chunk = parseStreamChunk(config.provider, data);
+          if (chunk) yield chunk;
+        }
+      }
+      yield { type: 'finish' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private buildHttpTools(): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
+    if (!this.isSkillEnabled('http_tools')) return [];
+    const tools = this.indexDb.listHttpTools().filter((t) => t.enabled);
+    return tools.map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: tool.id,
+        description: tool.description || tool.name,
+        parameters: {
+          type: 'object',
+          properties: {
+            input: { type: 'string', description: `输入参数，将作为 ${tool.method} 请求的 body` }
+          }
+        }
+      }
+    }));
+  }
+
+  private async executeHttpTool(toolCallId: string, args: string): Promise<string> {
+    const tools = this.indexDb.listHttpTools();
+    const tool = tools.find((t) => t.id === toolCallId);
+    if (!tool) return JSON.stringify({ error: `Tool ${toolCallId} not found` });
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), tool.timeoutMs);
+    try {
+      const init: RequestInit = {
+        method: tool.method,
+        headers: { 'content-type': 'application/json', ...tool.headers },
+        signal: controller.signal
+      };
+      if (tool.method === 'POST') {
+        init.body = args;
+      }
+      const response = await this.fetchImpl(tool.url, init);
+      const text = await response.text();
+      return text.slice(0, 4_000);
+    } catch (error) {
+      return JSON.stringify({ error: summarizeError(error) });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async callLlmWithTools(
+    messages: LlmMessage[],
+    options: { maxTokens?: number },
+    tools: Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>
+  ): Promise<LlmJsonResult> {
+    const config = this.getConfig().llm;
+    const apiKey = this.decryptApiKey('ai.llm');
+    if (!config.enabled || !apiKey) {
+      throw new Error('LLM 未配置');
+    }
+
+    const requestConfig: LlmRequestConfig = {
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey,
+      temperature: config.temperature,
+      topP: config.topP,
+      maxTokens: options.maxTokens ?? config.maxTokens,
+      timeoutMs: config.timeoutMs
+    };
+
+    const { url, headers } = buildLlmRequest(requestConfig, messages, false);
+    const isAzure = config.provider === 'azure-openai';
+    const messageHistory: Array<Record<string, unknown>> = messages.map((m) => ({ role: m.role, content: m.content }));
+    const started = Date.now();
+    let lastContent = '';
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    let hasUsage = false;
+
+    for (let round = 0; round < 3; round += 1) {
+      const body: Record<string, unknown> = {
+        messages: messageHistory,
+        temperature: config.temperature ?? 0.2,
+        stream: false,
+        tools
+      };
+      if (!isAzure) {
+        body.model = config.model;
+      }
+      const maxTokens = options.maxTokens ?? config.maxTokens;
+      if (maxTokens !== undefined) {
+        body.max_tokens = maxTokens;
+      }
+      if (config.topP !== undefined) {
+        body.top_p = config.topP;
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
+      let json: Record<string, unknown>;
+      try {
+        const response = await this.fetchImpl(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+        json = await parseJsonResponse(response);
+      } finally {
+        clearTimeout(timer);
+      }
+
+      const choices = Array.isArray(json.choices) ? (json.choices as Array<Record<string, unknown>>) : [];
+      const choice = choices[0] ?? {};
+      const message = (choice.message ?? {}) as Record<string, unknown>;
+      lastContent = typeof message.content === 'string' ? message.content : '';
+
+      const usage = json.usage as { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      if (usage) {
+        hasUsage = true;
+        totalPromptTokens += usage.prompt_tokens ?? 0;
+        totalCompletionTokens += usage.completion_tokens ?? 0;
+      }
+
+      const toolCalls = Array.isArray(message.tool_calls) ? (message.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }>) : undefined;
+      if (!toolCalls?.length) {
+        break;
+      }
+
+      messageHistory.push({
+        role: 'assistant',
+        content: lastContent || null,
+        tool_calls: toolCalls
+      });
+
+      for (const tc of toolCalls) {
+        const toolResult = await this.executeHttpTool(tc.function.name, tc.function.arguments);
+        messageHistory.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: toolResult
+        });
+      }
+    }
+
+    return {
+      content: lastContent,
+      provider: config.provider,
+      model: config.model,
+      latencyMs: Date.now() - started,
+      usage: hasUsage ? { promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens } : undefined
+    };
   }
 
   private async embedText(text: string): Promise<number[]> {
@@ -487,21 +1071,27 @@ export class AiService {
       throw new Error('Embedding 未配置');
     }
 
+    const requestConfig: LlmRequestConfig = {
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+      apiKey,
+      timeoutMs: config.timeoutMs
+    };
+
+    const { url, headers, body } = buildEmbeddingRequest(requestConfig, text);
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
     try {
-      const response = await this.fetchImpl(joinUrl(config.baseUrl, '/embeddings'), {
+      const response = await this.fetchImpl(url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: config.model, input: text.slice(0, 8_000) }),
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify(body),
         signal: controller.signal
       });
       const json = await parseJsonResponse(response);
-      const embedding = json.data?.[0]?.embedding;
-      if (!Array.isArray(embedding)) {
-        throw new Error('Embedding 响应缺少向量');
-      }
-      return embedding.map(Number).filter((value: number) => Number.isFinite(value));
+      return parseEmbeddingResponse(config.provider, json);
     } finally {
       clearTimeout(timer);
     }
@@ -541,22 +1131,54 @@ function normalizeModelConfig(record: string | undefined, fallbackProvider: AiCo
   const parsed = safeJson<Record<string, unknown>>(record ?? '{}') ?? {};
   return {
     enabled: Boolean(parsed.enabled),
-    provider: parsed.provider === 'anthropic' ? 'anthropic' : fallbackProvider,
+    provider: (parsed.provider as AiProvider) ?? fallbackProvider,
     baseUrl: typeof parsed.baseUrl === 'string' ? parsed.baseUrl : fallbackBaseUrl,
     model: typeof parsed.model === 'string' && parsed.model ? parsed.model : fallbackModel,
     timeoutMs: clampNumber(Number(parsed.timeoutMs), 1_000, 120_000, 30_000),
-    apiKeySet: typeof parsed.encryptedApiKey === 'string' && parsed.encryptedApiKey.length > 0
+    apiKeySet: typeof parsed.encryptedApiKey === 'string' && parsed.encryptedApiKey.length > 0,
+    temperature: parsed.temperature !== undefined ? clampNumber(Number(parsed.temperature), 0, 2, 0.2) : undefined,
+    topP: parsed.topP !== undefined ? clampNumber(Number(parsed.topP), 0, 1, 0.9) : undefined,
+    maxTokens: parsed.maxTokens !== undefined ? clampNumber(Number(parsed.maxTokens), 1, 32_000, 1_000) : undefined
   };
+}
+
+function isOpenAiCompatibleProvider(provider: AiProvider): boolean {
+  return provider === 'openai' || provider === 'openai-compatible' || provider === 'deepseek' || provider === 'qwen' || provider === 'azure-openai';
 }
 
 function splitText(text: string, chunkSize = 900, overlap = 120): string[] {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return [];
+
+  const sentences = normalized.split(/(?<=[。！？；\n.!?])/);
   const chunks: string[] = [];
-  for (let start = 0; start < normalized.length; start += chunkSize - overlap) {
-    chunks.push(normalized.slice(start, start + chunkSize));
-    if (start + chunkSize >= normalized.length) break;
+  let currentChunk = '';
+
+  for (const sentence of sentences) {
+    const trimmedSentence = sentence.trim();
+    if (!trimmedSentence) continue;
+
+    if (trimmedSentence.length > chunkSize) {
+      if (currentChunk) {
+        chunks.push(currentChunk);
+        currentChunk = currentChunk.slice(-overlap);
+      }
+      for (let i = 0; i < trimmedSentence.length; i += chunkSize - overlap) {
+        chunks.push(trimmedSentence.slice(i, i + chunkSize));
+      }
+      currentChunk = '';
+      continue;
+    }
+
+    if (currentChunk.length + trimmedSentence.length <= chunkSize) {
+      currentChunk += trimmedSentence;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      currentChunk = trimmedSentence;
+    }
   }
+
+  if (currentChunk) chunks.push(currentChunk);
   return chunks;
 }
 
@@ -589,10 +1211,6 @@ function assertHttpUrl(value: string): string {
     throw new Error('Only HTTP/HTTPS URLs are allowed');
   }
   return url.toString().replace(/\/$/, '');
-}
-
-function joinUrl(baseUrl: string, path: string): string {
-  return `${baseUrl.replace(/\/$/, '')}${path}`;
 }
 
 function sanitizeId(value: string): string {
@@ -669,7 +1287,11 @@ function trimText(text: string, limit: number): string {
 }
 
 function summarizeError(error: unknown): string {
-  return error instanceof Error ? error.message.slice(0, 300) : 'Unknown error';
+  if (error instanceof Error) {
+    const msg = error.message;
+    return msg.length > 500 ? `${msg.slice(0, 500)}…` : msg;
+  }
+  return 'Unknown error';
 }
 
 function degradedAgentResponse<T>(requestId: string | undefined, warning: string, evidence: RetrievedContext[]): AiAgentResponse<T> {
@@ -678,17 +1300,4 @@ function degradedAgentResponse<T>(requestId: string | undefined, warning: string
 
 function errorAgentResponse<T>(requestId: string | undefined, message: string, evidence: RetrievedContext[]): AiAgentResponse<T> {
   return { requestId: requestId ?? randomUUID(), status: 'error', warnings: [], evidence, error: { code: 'AI_CALL_FAILED', message, recoverable: true } };
-}
-
-export function cosineSimilarity(a: number[], b: number[]): number {
-  const length = Math.min(a.length, b.length);
-  let dot = 0;
-  let aNorm = 0;
-  let bNorm = 0;
-  for (let index = 0; index < length; index += 1) {
-    dot += a[index] * b[index];
-    aNorm += a[index] * a[index];
-    bNorm += b[index] * b[index];
-  }
-  return aNorm && bNorm ? dot / (Math.sqrt(aNorm) * Math.sqrt(bNorm)) : 0;
 }

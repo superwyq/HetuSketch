@@ -1,0 +1,64 @@
+/**
+ * HetuSketch Design Tokens — Typography
+ *
+ * Dual-font system (see docs/DESIGN.md §3):
+ * - UI font for tool/control surfaces (panels, buttons, labels, tree views).
+ * - Editor font for immersive long-form writing (Markdown body).
+ *
+ * Editor tokens (--font-family-editor, --font-size-editor, --line-height-editor)
+ * are user-overridable; defaults are provided here.
+ */
+
+:root {
+  /* ---- Font families ------------------------------------------------- */
+  --font-family-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
+  --font-family-editor: 'LXGW WenKai', '霞鹜文楷', 'Source Han Serif SC',
+    'Noto Serif CJK SC', serif;
+
+  /* ---- Font sizes ---------------------------------------------------- */
+  --font-size-body-xs: 12px;
+  --font-size-body-sm: 13px;
+  --font-size-body-md: 14px;
+  --font-size-body-lg: 16px;
+
+  --font-size-heading-xs: 18px;
+  --font-size-heading-sm: 20px;
+  --font-size-heading-md: 24px;
+  --font-size-heading-lg: 32px;
+  --font-size-heading-xl: 40px;
+
+  /* Editor font size — user overridable */
+  --font-size-editor: 16px;
+
+  /* ---- Font weights -------------------------------------------------- */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 700;
+
+  /* ---- Line heights -------------------------------------------------- */
+  --line-height-body-xs: 18px;
+  --line-height-body-sm: 20px;
+  --line-height-body-md: 20px;
+  --line-height-body-lg: 24px;
+
+  --line-height-heading-xs: 24px;
+  --line-height-heading-sm: 28px;
+  --line-height-heading-md: 32px;
+  --line-height-heading-lg: 40px;
+
+  /* Editor line height — user overridable */
+  --line-height-editor: 1.6;
+
+  /* ---- Paragraph spacing -------------------------------------------- */
+  --paragraph-spacing-body-xs: 4px;
+  --paragraph-spacing-body-sm: 6px;
+  --paragraph-spacing-body-md: 8px;
+  --paragraph-spacing-body-lg: 12px;
+
+  --paragraph-spacing-heading-xs: 12px;
+  --paragraph-spacing-heading-sm: 16px;
+  --paragraph-spacing-heading-md: 20px;
+  --paragraph-spacing-heading-lg: 24px;
+  --paragraph-spacing-heading-xl: 32px;
+}

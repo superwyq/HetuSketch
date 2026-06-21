@@ -3,10 +3,14 @@ import { rm } from 'node:fs/promises';
 import type {
   AiConfig,
   AiConfigSaveInput,
+  AgentConfig,
+  AgentReorderInput,
+  AgentSaveInput,
   AiPromptConfig,
   AiPromptSaveInput,
   AiSkillConfig,
   AiSkillSaveInput,
+  AiStreamChunk,
   AiValidationRequest,
   AiValidationResult,
   AiAgentResponse,
@@ -30,6 +34,7 @@ import type {
   HttpToolConfig,
   HttpToolSaveInput,
   IndexSyncSummary,
+  ModelInfo,
   PlotEntry,
   ProjectCreateInput,
   ProjectEntry,
@@ -77,7 +82,7 @@ export class StorageService {
   private readonly fileStore: ProjectFileStore;
   private readonly indexDb: IndexDatabase;
   private readonly indexService: IndexService;
-  private readonly aiService: AiService;
+  readonly aiService: AiService;
   private readonly settingSetService: SettingSetService;
   private readonly bookService: BookService;
   private readonly chapterService: ChapterService;
@@ -333,6 +338,13 @@ export class StorageService {
     this.aiService.deleteHttpTool(toolId);
   }
 
+  listAgents(): AgentConfig[] { return this.aiService.listAgents(); }
+  getAgent(id: string): AgentConfig | null { return this.aiService.getAgent(id); }
+  createAgent(input: AgentSaveInput): AgentConfig { return this.aiService.createAgent(input); }
+  updateAgent(input: AgentSaveInput): AgentConfig { return this.aiService.updateAgent(input); }
+  deleteAgent(id: string): void { return this.aiService.deleteAgent(id); }
+  reorderAgents(input: AgentReorderInput[]): AgentConfig[] { return this.aiService.reorderAgents(input); }
+
   testAiConnection(kind: 'llm' | 'embedding'): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
     return this.aiService.testConnection(kind);
   }
@@ -364,6 +376,26 @@ export class StorageService {
 
   ragAnswer(request: RagQueryRequest): Promise<AiAgentResponse<{ answer: string; citations: RetrievedContext[] }>> {
     return this.aiService.ragAnswer(request);
+  }
+
+  listAiModels(kind: 'llm' | 'embedding'): Promise<ModelInfo[]> {
+    return this.aiService.listModels(kind);
+  }
+
+  streamValidation(request: AiValidationRequest, basic: ValidationResult): AsyncGenerator<AiStreamChunk> {
+    return this.aiService.streamValidation(request, basic);
+  }
+
+  streamRagAnswer(request: RagQueryRequest): AsyncGenerator<AiStreamChunk> {
+    return this.aiService.streamRagAnswer(request);
+  }
+
+  streamCompleteSetting(request: SettingCompletionRequest): AsyncGenerator<AiStreamChunk> {
+    return this.aiService.streamCompleteSetting(request);
+  }
+
+  streamForeshadowingReminder(projectId: string, text: string, requestId?: string): AsyncGenerator<AiStreamChunk> {
+    return this.aiService.streamForeshadowingReminder(projectId, text, requestId);
   }
 
   async rebuildIndex(projectId?: string): Promise<IndexSyncSummary> {

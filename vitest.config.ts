@@ -21,6 +21,12 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/renderer/test/setup.ts',
     globals: true,
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/out/**',
+      '**/reference/**'
+    ],
     server: {
       deps: {
         external: ['chokidar', 'adm-zip']

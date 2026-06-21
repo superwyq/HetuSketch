@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Tray, Menu, dialog, globalShortcut, ipcMain, nativeImage, shell } from 'electron';
 import { join } from 'node:path';
 import { IPC_CHANNELS } from '../shared/ipc.js';
-import type { EntryType, ProjectCreateInput, RagQueryRequest, SearchQuery, ValidationRequest } from '../shared/storageTypes.js';
+import type { AiValidationRequest, EntryType, ProjectCreateInput, RagQueryRequest, SearchQuery, SettingCompletionRequest, ValidationRequest } from '../shared/storageTypes.js';
 import { StorageService } from './services/storageService.js';
 import { getSystemFonts } from './services/fontService.js';
 
@@ -317,6 +317,12 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.aiHttpToolsList, () => storageService.listHttpTools());
   ipcMain.handle(IPC_CHANNELS.aiHttpToolsSave, (_event, input: unknown) => storageService.saveHttpTool(asObject(input)));
   ipcMain.handle(IPC_CHANNELS.aiHttpToolsDelete, (_event, toolId: unknown) => storageService.deleteHttpTool(asRequiredString(toolId, 'toolId')));
+  ipcMain.handle(IPC_CHANNELS.agentList, () => storageService.listAgents());
+  ipcMain.handle(IPC_CHANNELS.agentGet, (_event, id: unknown) => storageService.getAgent(asRequiredString(id, 'agentId')));
+  ipcMain.handle(IPC_CHANNELS.agentCreate, (_event, input: unknown) => storageService.createAgent(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.agentUpdate, (_event, input: unknown) => storageService.updateAgent(asObject(input)));
+  ipcMain.handle(IPC_CHANNELS.agentDelete, (_event, id: unknown) => storageService.deleteAgent(asRequiredString(id, 'agentId')));
+  ipcMain.handle(IPC_CHANNELS.agentReorder, (_event, input: unknown) => storageService.reorderAgents(asArray(input)));
   ipcMain.handle(IPC_CHANNELS.ragBuild, (_event, projectId: unknown) => storageService.buildVectorIndex(asRequiredString(projectId, 'projectId')));
   ipcMain.handle(IPC_CHANNELS.ragState, (_event, projectId: unknown) => storageService.getVectorIndexState(asRequiredString(projectId, 'projectId')));
   ipcMain.handle(IPC_CHANNELS.ragQuery, (_event, request: unknown) => storageService.ragQuery(asRagQueryRequest(request)));
@@ -325,6 +331,76 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.aiForeshadowing, (_event, projectId: unknown, text: unknown, requestId: unknown) =>
     storageService.foreshadowingReminder(asRequiredString(projectId, 'projectId'), typeof text === 'string' ? text.slice(0, 50_000) : '', asOptionalString(requestId))
   );
+
+  // AI 模型列表拉取
+  ipcMain.handle(IPC_CHANNELS.aiModelsList, (_event, kind: unknown) =>
+    storageService.listAiModels(kind === 'embedding' ? 'embedding' : 'llm')
+  );
+
+  // AI 流式校验
+  ipcMain.on(IPC_CHANNELS.aiStreamValidation, async (event, request: unknown) => {
+    const req = request as Record<string, unknown>;
+    const requestId = typeof req.requestId === 'string' ? req.requestId : '';
+    const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamValidation}:${suffix}:${requestId}`;
+    try {
+      const validationRequest = asValidationRequest(request) as AiValidationRequest;
+      validationRequest.requestId = requestId;
+      const basic = await storageService.validateContent(validationRequest);
+      for await (const chunk of storageService.streamValidation(validationRequest, basic)) {
+        event.sender.send(channel('chunk'), chunk);
+      }
+      event.sender.send(channel('end'));
+    } catch (error) {
+      event.sender.send(channel('error'), error instanceof Error ? error.message : '流式校验失败');
+    }
+  });
+
+  // AI 流式 RAG 回答
+  ipcMain.on(IPC_CHANNELS.aiStreamRagAnswer, async (event, request: unknown) => {
+    const req = request as Record<string, unknown>;
+    const requestId = typeof req.requestId === 'string' ? req.requestId : '';
+    const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamRagAnswer}:${suffix}:${requestId}`;
+    try {
+      const ragRequest = asRagQueryRequest(request);
+      ragRequest.requestId = requestId;
+      for await (const chunk of storageService.streamRagAnswer(ragRequest)) {
+        event.sender.send(channel('chunk'), chunk);
+      }
+      event.sender.send(channel('end'));
+    } catch (error) {
+      event.sender.send(channel('error'), error instanceof Error ? error.message : '流式回答失败');
+    }
+  });
+
+  // AI 流式设定补全
+  ipcMain.on(IPC_CHANNELS.aiStreamCompleteSetting, async (event, request: unknown) => {
+    const req = request as Record<string, unknown>;
+    const requestId = typeof req.requestId === 'string' ? req.requestId : '';
+    const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamCompleteSetting}:${suffix}:${requestId}`;
+    try {
+      const completionRequest = request as SettingCompletionRequest;
+      for await (const chunk of storageService.streamCompleteSetting(completionRequest)) {
+        event.sender.send(channel('chunk'), chunk);
+      }
+      event.sender.send(channel('end'));
+    } catch (error) {
+      event.sender.send(channel('error'), error instanceof Error ? error.message : '流式补全失败');
+    }
+  });
+
+  // AI 流式伏笔提醒
+  ipcMain.on(IPC_CHANNELS.aiStreamForeshadowing, async (event, projectId: unknown, text: unknown, requestId: unknown) => {
+    const id = typeof requestId === 'string' ? requestId : '';
+    const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamForeshadowing}:${suffix}:${id}`;
+    try {
+      for await (const chunk of storageService.streamForeshadowingReminder(asRequiredString(projectId, 'projectId'), typeof text === 'string' ? text.slice(0, 50_000) : '', id)) {
+        event.sender.send(channel('chunk'), chunk);
+      }
+      event.sender.send(channel('end'));
+    } catch (error) {
+      event.sender.send(channel('error'), error instanceof Error ? error.message : '流式伏笔提醒失败');
+    }
+  });
 
   ipcMain.handle(IPC_CHANNELS.indexRebuild, async (_event, projectId: unknown) =>
     storageService.rebuildIndex(typeof projectId === 'string' ? projectId : undefined)

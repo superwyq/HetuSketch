@@ -426,7 +426,7 @@ export interface VectorIndexState {
   warnings: string[];
 }
 
-export type AiProvider = 'openai-compatible' | 'anthropic';
+export type AiProvider = 'openai' | 'anthropic' | 'azure-openai' | 'gemini' | 'ollama' | 'deepseek' | 'qwen' | 'openai-compatible';
 
 export interface AiModelConfigPublic {
   enabled: boolean;
@@ -435,6 +435,9 @@ export interface AiModelConfigPublic {
   model: string;
   timeoutMs: number;
   apiKeySet: boolean;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
 }
 
 export interface AiConfig {
@@ -449,6 +452,26 @@ export interface AiModelConfigSaveInput {
   model?: string;
   timeoutMs?: number;
   apiKey?: string;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+}
+
+export interface ModelInfo {
+  id: string;
+  name?: string;
+  ownedBy?: string;
+}
+
+export interface AiStreamChunk {
+  type: 'delta' | 'finish' | 'usage' | 'error';
+  content?: string;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+  };
+  error?: string;
 }
 
 export interface AiConfigSaveInput {
@@ -505,6 +528,52 @@ export interface HttpToolSaveInput {
   headers?: Record<string, string>;
   enabled?: boolean;
   timeoutMs?: number;
+}
+
+/** 智能体配置 - 每个智能体独立组合模型、提示词、技能、工具 */
+export interface AgentConfig {
+  id: string;
+  name: string;
+  description: string;
+  /** 系统提示词 */
+  systemPrompt: string;
+  /** 场景提示词（保留兼容旧 AiPromptConfig.scenarios） */
+  scenarios: Partial<Record<'logic_check' | 'setting_completion' | 'foreshadowing' | 'rag_qa', string>>;
+  /** 使用的模型 ID（引用 aiConfig.llm.model 或自定义） */
+  model: string;
+  /** 模型参数（每个智能体独立） */
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  /** 启用的技能 ID 列表（引用 AiSkillConfig.id） */
+  enabledSkills: string[];
+  /** 启用的工具 ID 列表（引用 HttpToolConfig.id） */
+  enabledTools: string[];
+  /** 排序序号 */
+  order: number;
+  /** 是否内置（内置智能体不可删除） */
+  builtIn: boolean;
+  updatedAt: string;
+}
+
+export interface AgentSaveInput {
+  id?: string;
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  scenarios?: Partial<Record<'logic_check' | 'setting_completion' | 'foreshadowing' | 'rag_qa', string>>;
+  model?: string;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  enabledSkills?: string[];
+  enabledTools?: string[];
+  order?: number;
+}
+
+export interface AgentReorderInput {
+  id: string;
+  order: number;
 }
 
 export type RetrievalMode = 'fts' | 'vector' | 'hybrid';

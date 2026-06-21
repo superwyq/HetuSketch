@@ -1,8 +1,8 @@
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Alert, Avatar, Button, Card, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Switch, Tag, Typography, message } from 'antd';
+import { Alert, Avatar, Button, Card, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography, message } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import type { EntryCreateInput, EntryRelation, EntryType, PlotStatus, ProjectEntry } from '@shared/storageTypes';
+import type { AiStreamChunk, EntryCreateInput, EntryRelation, EntryType, PlotStatus, ProjectEntry, SettingCompletionRequest, SettingCompletionResult } from '@shared/storageTypes';
 import { RelationshipCanvas } from '../components/RelationshipCanvas';
 import { useAppStore } from '../store/appStore';
 
@@ -55,6 +55,13 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  // AI 设定补全相关状态
+  const [completionGoal, setCompletionGoal] = useState<NonNullable<SettingCompletionRequest['completionGoal']>>('fill_empty_fields');
+  const [aiStreaming, setAiStreaming] = useState(false);
+  const [aiPreviewText, setAiPreviewText] = useState('');
+  const [aiResult, setAiResult] = useState<SettingCompletionResult>();
+  const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
+  const [ignoredFields, setIgnoredFields] = useState<Set<string>>(new Set());
   const meta = pageMeta[type];
   const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const roleQuery = query.get('role') ?? 'all';
@@ -160,24 +167,53 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
       message.warning('请先选择作品');
       return;
     }
+    // 收集表单中的草稿内容（标题、摘要、正文）
     const draft = [form.getFieldValue('title'), form.getFieldValue('summary'), form.getFieldValue('content')].filter(Boolean).join('\n');
     if (!draft.trim()) {
       message.warning('请先输入草稿内容');
       return;
     }
-    const hide = message.loading('正在请求 AI 设定补全...', 0);
+    // 收集当前表单值作为已有字段上下文
+    const existingFields = form.getFieldsValue() as unknown as Record<string, unknown>;
+    // 重置流式状态并打开预览
+    setAiStreaming(true);
+    setAiPreviewText('');
+    setAiResult(undefined);
+    setIgnoredFields(new Set());
+    setAiPreviewOpen(true);
+
+    let accumulated = '';
+    const request: SettingCompletionRequest = {
+      projectId: selectedProject.id,
+      entityType: type,
+      draft,
+      existingFields,
+      completionGoal,
+      topK: 5
+    };
+
     try {
-      const response = await window.hetuSketch.ai.completeSetting({ projectId: selectedProject.id, entityType: type, draft, completionGoal: 'fill_empty_fields' });
-      if (response.data?.proposedFields) {
-        form.setFieldsValue(response.data.proposedFields as Partial<EntryCreateInput>);
-        message.success('已填入 AI 建议，请人工审阅后保存');
-      } else {
-        message.warning(response.error?.message ?? 'AI 未返回可采纳建议');
-      }
+      await window.hetuSketch.ai.streamCompleteSetting(request, (chunk: AiStreamChunk) => {
+        if (chunk.type === 'delta' && chunk.content) {
+          // 文本增量：追加到预览区域
+          accumulated += chunk.content;
+          setAiPreviewText(accumulated);
+        } else if (chunk.type === 'error') {
+          // 错误信息
+          message.error(chunk.error ?? 'AI 补全失败');
+        } else if (chunk.type === 'finish') {
+          // 流式结束：尝试解析累积文本为 SettingCompletionResult
+          const parsed = parseCompletionResult(accumulated);
+          if (parsed) {
+            setAiResult(parsed);
+          }
+        }
+      });
+      message.success('AI 补全已完成，请审阅建议');
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : 'AI 补全失败');
     } finally {
-      hide();
+      setAiStreaming(false);
     }
   };
 
@@ -247,7 +283,19 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
         footer={null}
       >
         <Space className="modal-toolbar" wrap>
-          <Button icon={<RobotOutlined />} onClick={() => void aiComplete()}>AI 辅助补全</Button>
+          <Button icon={<RobotOutlined />} onClick={() => void aiComplete()} loading={aiStreaming}>AI 辅助补全</Button>
+          <Select
+            size="small"
+            value={completionGoal}
+            onChange={setCompletionGoal}
+            options={[
+              { value: 'fill_empty_fields', label: '填空字段' },
+              { value: 'expand_red_lines', label: '扩展红线' },
+              { value: 'suggest_relations', label: '建议关系' },
+              { value: 'normalize_tags', label: '规范标签' }
+            ]}
+            style={{ width: 140 }}
+          />
         </Space>
         <Form form={form} layout="vertical" onFinish={(values) => void saveEntry(values)} disabled={!selectedProject}>
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }, { max: 80, message: '标题不超过 80 字' }]}>
@@ -363,6 +411,61 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
           )}
         </div>
       )}
+
+      <Drawer
+        title="AI 设定补全建议"
+        open={aiPreviewOpen}
+        onClose={() => setAiPreviewOpen(false)}
+        width={520}
+        destroyOnClose
+      >
+        {aiStreaming && (
+          <Space style={{ marginBottom: 16 }}>
+            <Spin size="small" />
+            <Typography.Text type="secondary">正在生成建议...</Typography.Text>
+          </Space>
+        )}
+        {aiPreviewText && (
+          <Card size="small" title="原始输出" style={{ marginBottom: 16 }}>
+            <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto', marginBottom: 0 }}>{aiPreviewText}</Typography.Paragraph>
+          </Card>
+        )}
+        {aiResult?.proposedFields && Object.keys(aiResult.proposedFields).length > 0 && (
+          <Card size="small" title="建议字段" style={{ marginBottom: 16 }}>
+            {Object.entries(aiResult.proposedFields)
+              .filter(([field]) => !ignoredFields.has(field))
+              .map(([field, value]) => (
+                <div key={field} style={{ marginBottom: 12 }}>
+                  <Typography.Text strong>{field}</Typography.Text>
+                  <Typography.Paragraph style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>{String(value)}</Typography.Paragraph>
+                  <Space>
+                    <Button size="small" type="primary" onClick={() => { form.setFieldValue(field as keyof EntryCreateInput, value as EntryCreateInput[keyof EntryCreateInput]); message.success(`已采纳字段：${field}`); }}>采纳</Button>
+                    <Button size="small" onClick={() => setIgnoredFields((prev) => new Set(prev).add(field))}>忽略</Button>
+                  </Space>
+                </div>
+              ))}
+          </Card>
+        )}
+        {aiResult?.missingQuestions && aiResult.missingQuestions.length > 0 && (
+          <Card size="small" title="缺失问题" style={{ marginBottom: 16 }}>
+            {aiResult.missingQuestions.map((question, index) => (
+              <Typography.Paragraph key={index} style={{ marginBottom: 4 }}>• {question}</Typography.Paragraph>
+            ))}
+          </Card>
+        )}
+        {aiResult?.possibleConflicts && aiResult.possibleConflicts.length > 0 && (
+          <Card size="small" title="潜在冲突" style={{ marginBottom: 16 }}>
+            {aiResult.possibleConflicts.map((conflict, index) => (
+              <Typography.Paragraph key={index} style={{ marginBottom: 4 }}>
+                <Tag color="orange">{conflict.field}</Tag> {conflict.reason}
+              </Typography.Paragraph>
+            ))}
+          </Card>
+        )}
+        {!aiStreaming && !aiPreviewText && !aiResult && (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无补全结果" />
+        )}
+      </Drawer>
     </div>
   );
 }
@@ -570,4 +673,38 @@ function renderEntryTags(entry: ProjectEntry): React.ReactNode {
 
 function entryTypeLabel(type: EntryType): string {
   return ({ character: '角色', world: '世界观', plot: '线索' } as const)[type];
+}
+
+// 从流式累积文本中解析 SettingCompletionResult，兼容纯 JSON、markdown 代码块和裸 JSON 片段
+function parseCompletionResult(text: string): SettingCompletionResult | undefined {
+  if (!text.trim()) return undefined;
+  // 尝试直接解析整段文本
+  try {
+    const parsed = JSON.parse(text) as SettingCompletionResult;
+    if (parsed.proposedFields) return parsed;
+  } catch {
+    // 继续尝试其他提取方式
+  }
+  // 尝试从 markdown 代码块中提取 JSON
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    try {
+      const parsed = JSON.parse(codeBlockMatch[1].trim()) as SettingCompletionResult;
+      if (parsed.proposedFields) return parsed;
+    } catch {
+      // 继续尝试其他提取方式
+    }
+  }
+  // 尝试提取第一个 { 到最后一个 } 之间的内容
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1)) as SettingCompletionResult;
+      if (parsed.proposedFields) return parsed;
+    } catch {
+      // 解析失败，返回 undefined
+    }
+  }
+  return undefined;
 }

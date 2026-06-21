@@ -76,7 +76,28 @@ Object.defineProperty(window, 'hetuSketch', {
       saveHttpTool: async (input: { name: string; url: string; method?: 'GET' | 'POST'; description?: string }) => ({ id: 'tool-1', name: input.name, description: input.description ?? '', url: input.url, method: input.method ?? 'POST', headers: {}, enabled: true, timeoutMs: 30000, updatedAt: new Date().toISOString() }),
       deleteHttpTool: async () => undefined,
       completeSetting: async () => ({ requestId: 'test', status: 'degraded', warnings: [], evidence: [], data: undefined }),
-      foreshadowing: async () => ({ requestId: 'test', status: 'degraded', warnings: [], evidence: [], data: { reminders: [] } })
+      foreshadowing: async () => ({ requestId: 'test', status: 'degraded', warnings: [], evidence: [], data: { reminders: [] } }),
+      listModels: async () => [],
+      streamValidation: async (_request: unknown, _basic: unknown, onChunk?: (chunk: unknown) => void) => {
+        if (onChunk) {
+          onChunk({ type: 'error', error: 'AI 未配置' });
+        }
+      },
+      streamRagAnswer: async (_request: unknown, onChunk?: (chunk: unknown) => void) => {
+        if (onChunk) {
+          onChunk({ type: 'error', error: 'AI 未配置' });
+        }
+      },
+      streamCompleteSetting: async (_request: unknown, onChunk?: (chunk: unknown) => void) => {
+        if (onChunk) {
+          onChunk({ type: 'error', error: 'AI 未配置' });
+        }
+      },
+      streamForeshadowing: async (_projectId: string, _text: string, onChunk?: (chunk: unknown) => void, _requestId?: string) => {
+        if (onChunk) {
+          onChunk({ type: 'error', error: 'AI 未配置' });
+        }
+      }
     },
     rag: {
       build: async (projectId: string) => ({ status: 'degraded', projectId, dirty: true, updatedAt: new Date().toISOString(), chunkCount: 0, embeddedCount: 0, warnings: [] }),

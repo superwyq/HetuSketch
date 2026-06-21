@@ -2,10 +2,14 @@ import type {
   AiAgentResponse,
   AiConfig,
   AiConfigSaveInput,
+  AgentConfig,
+  AgentReorderInput,
+  AgentSaveInput,
   AiPromptConfig,
   AiPromptSaveInput,
   AiSkillConfig,
   AiSkillSaveInput,
+  AiStreamChunk,
   AiValidationRequest,
   AiValidationResult,
   BookBindingResult,
@@ -26,6 +30,7 @@ import type {
   HttpToolConfig,
   HttpToolSaveInput,
   IndexSyncSummary,
+  ModelInfo,
   ProjectCreateInput,
   ProjectEntry,
   ProjectExportResult,
@@ -103,12 +108,23 @@ export const IPC_CHANNELS = {
   aiHttpToolsList: 'ai:http-tools:list',
   aiHttpToolsSave: 'ai:http-tools:save',
   aiHttpToolsDelete: 'ai:http-tools:delete',
+  agentList: 'agent:list',
+  agentGet: 'agent:get',
+  agentCreate: 'agent:create',
+  agentUpdate: 'agent:update',
+  agentDelete: 'agent:delete',
+  agentReorder: 'agent:reorder',
   ragBuild: 'rag:build',
   ragState: 'rag:state',
   ragQuery: 'rag:query',
   ragAnswer: 'rag:answer',
   aiSettingComplete: 'ai:setting:complete',
   aiForeshadowing: 'ai:foreshadowing',
+  aiModelsList: 'ai:models:list',
+  aiStreamValidation: 'ai:stream:validation',
+  aiStreamRagAnswer: 'ai:stream:rag-answer',
+  aiStreamCompleteSetting: 'ai:stream:complete-setting',
+  aiStreamForeshadowing: 'ai:stream:foreshadowing',
   indexRebuild: 'index:rebuild',
   systemFonts: 'system:fonts',
   desktopFloatingToggle: 'desktop:floating:toggle',
@@ -204,6 +220,19 @@ export interface HetuSketchApi {
     deleteHttpTool: (toolId: string) => Promise<void>;
     completeSetting: (request: SettingCompletionRequest) => Promise<AiAgentResponse<SettingCompletionResult>>;
     foreshadowing: (projectId: string, text: string, requestId?: string) => Promise<AiAgentResponse<{ reminders: ValidationFinding[] }>>;
+    listModels: (kind: 'llm' | 'embedding') => Promise<ModelInfo[]>;
+    streamValidation: (request: AiValidationRequest, basic: ValidationResult, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;
+    streamRagAnswer: (request: RagQueryRequest, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;
+    streamCompleteSetting: (request: SettingCompletionRequest, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;
+    streamForeshadowing: (projectId: string, text: string, onChunk: (chunk: AiStreamChunk) => void, requestId?: string) => Promise<void>;
+  };
+  agent: {
+    list: () => Promise<AgentConfig[]>;
+    get: (id: string) => Promise<AgentConfig | null>;
+    create: (input: AgentSaveInput) => Promise<AgentConfig>;
+    update: (input: AgentSaveInput) => Promise<AgentConfig>;
+    delete: (id: string) => Promise<void>;
+    reorder: (input: AgentReorderInput[]) => Promise<AgentConfig[]>;
   };
   rag: {
     build: (projectId: string) => Promise<RagBuildResult>;

@@ -1,8 +1,9 @@
-import { CheckCircleOutlined, DeleteOutlined, FileAddOutlined, FolderAddOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Empty, Input, Popconfirm, Radio, Select, Space, message } from 'antd';
-import type { InputRef } from 'antd';
+import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Input, List, Popconfirm, Radio, Select, Space, Spin, Tabs, Tag, message } from 'antd';
+import type { GetRef, InputRef } from 'antd';
+import type { AiStreamChunk, AiValidationRequest, RagQueryRequest, ValidationFinding, ValidationResult } from '@shared/storageTypes';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ensureDefaultBook, ensureDefaultVolume, listChapters, removeChapter, type ChapterNode, type ChapterStatus, upsertChapter } from '../iterationStore';
 import { useAppStore } from '../store/appStore';
 
@@ -27,7 +28,12 @@ export function WritingStudioPage(): React.JSX.Element {
   const [validationScope, setValidationScope] = useState<'chapter' | 'volume' | 'project'>('chapter');
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  // AI 助手面板默认收起
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  // 编辑器中当前选中的文本，用于自动填入 AI 面板
+  const [selectedText, setSelectedText] = useState('');
   const titleInputRef = useRef<InputRef>(null);
+  const editorRef = useRef<GetRef<typeof Input.TextArea>>(null);
 
   const reload = useCallback((): void => {
     if (!selectedProject) {
@@ -59,6 +65,22 @@ export function WritingStudioPage(): React.JSX.Element {
       setActiveId(chapterId);
     }
   }, [chapters, location.search]);
+
+  // 监听编辑器选中文本变化，同步到 selectedText 状态
+  useEffect(() => {
+    const ta = editorRef.current?.resizableTextArea?.textArea;
+    if (!ta) return;
+    const updateSelection = (): void => {
+      const { selectionStart: start, selectionEnd: end } = ta;
+      setSelectedText(start !== end ? ta.value.slice(start, end) : '');
+    };
+    ta.addEventListener('mouseup', updateSelection);
+    ta.addEventListener('keyup', updateSelection);
+    return () => {
+      ta.removeEventListener('mouseup', updateSelection);
+      ta.removeEventListener('keyup', updateSelection);
+    };
+  }, [activeId, mode]);
 
   const activeChapter = useMemo(() => chapters.find((item) => item.id === activeId), [activeId, chapters]);
 
@@ -185,28 +207,284 @@ export function WritingStudioPage(): React.JSX.Element {
               <Select size="small" value={validationScope} onChange={setValidationScope} options={[{ value: 'chapter', label: '当前章节' }, { value: 'volume', label: '当前分卷' }, { value: 'project', label: '当前作品' }]} />
               <Button size="small" icon={<SaveOutlined />} onClick={() => message.success('已自动保存到本地')}>保存</Button>
               <Button size="small" icon={<CheckCircleOutlined />} onClick={() => void runValidation()}>逻辑校验</Button>
+              <Button size="small" type={aiPanelOpen ? 'primary' : 'default'} icon={<RobotOutlined />} onClick={() => setAiPanelOpen((open) => !open)}>AI 助手</Button>
               <Popconfirm title="删除该节点及子节点" onConfirm={() => { removeChapter(activeChapter.id); reload(); refreshSidebar(); }}>
                 <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
               </Popconfirm>
             </Space>
           </div>
 
-          <div className={`studio-editor-area mode-${mode}`}>
-            {mode !== 'preview' && (
-              <Input.TextArea
-                className="markdown-editor"
-                value={activeChapter.content}
-                onChange={(event) => updateActive({ content: event.target.value })}
-                placeholder="在这里写作。支持 Markdown 标题、列表、引用、代码块等基础语法。"
+          <div className="studio-body">
+            <div className={`studio-editor-area mode-${mode}`}>
+              {mode !== 'preview' && (
+                <Input.TextArea
+                  ref={editorRef}
+                  className="markdown-editor"
+                  value={activeChapter.content}
+                  onChange={(event) => updateActive({ content: event.target.value })}
+                  placeholder="在这里写作。支持 Markdown 标题、列表、引用、代码块等基础语法。"
+                />
+              )}
+              {mode !== 'edit' && <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(activeChapter.content) }} />}
+            </div>
+            {aiPanelOpen && (
+              <AiAssistantPanel
+                projectId={selectedProject.id}
+                selectedText={selectedText}
+                onClose={() => setAiPanelOpen(false)}
               />
             )}
-            {mode !== 'edit' && <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(activeChapter.content) }} />}
           </div>
         </>
       ) : (
         <div className="studio-empty"><Empty description="请选择或创建章节" /></div>
       )}
     </div>
+  );
+}
+
+interface AiAssistantPanelProps {
+  projectId: string;
+  selectedText: string;
+  onClose: () => void;
+}
+
+// AI 助手侧边面板：包含 AI 校验、伏笔提醒、RAG 问答三个 Tab
+function AiAssistantPanel({ projectId, selectedText, onClose }: AiAssistantPanelProps): React.JSX.Element {
+  const navigate = useNavigate();
+  const aiReady = useAppStore.getState().isAiReady();
+  const [activeTab, setActiveTab] = useState<'validation' | 'foreshadowing' | 'rag'>('validation');
+
+  // AI 校验 Tab 状态
+  const [validationText, setValidationText] = useState('');
+  const [validationOutput, setValidationOutput] = useState('');
+  const [validationFindings, setValidationFindings] = useState<ValidationFinding[]>([]);
+  const [validationLoading, setValidationLoading] = useState(false);
+
+  // 伏笔提醒 Tab 状态
+  const [foreshadowingText, setForeshadowingText] = useState('');
+  const [foreshadowingOutput, setForeshadowingOutput] = useState('');
+  const [foreshadowingReminders, setForeshadowingReminders] = useState<ValidationFinding[]>([]);
+  const [foreshadowingLoading, setForeshadowingLoading] = useState(false);
+
+  // RAG 问答 Tab 状态
+  const [ragQuery, setRagQuery] = useState('');
+  const [ragOutput, setRagOutput] = useState('');
+  const [ragLoading, setRagLoading] = useState(false);
+
+  // 编辑器选中文本时自动填入校验与伏笔输入框
+  useEffect(() => {
+    if (selectedText) {
+      setValidationText(selectedText);
+      setForeshadowingText(selectedText);
+    }
+  }, [selectedText]);
+
+  // AI 未配置时展示空状态与前往设置入口
+  if (!aiReady) {
+    return (
+      <aside className="ai-assistant-panel">
+        <div className="ai-assistant-header">
+          <span className="ai-assistant-title"><RobotOutlined /> AI 助手</span>
+          <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
+        </div>
+        <div className="ai-assistant-empty">
+          <Empty description="AI 尚未配置，请先在设置中开启 LLM 能力">
+            <Button type="primary" onClick={() => navigate('/settings')}>前往设置</Button>
+          </Empty>
+        </div>
+      </aside>
+    );
+  }
+
+  // 执行 AI 流式校验
+  const runValidation = async (): Promise<void> => {
+    if (!validationText.trim()) {
+      message.warning('请输入待校验文本');
+      return;
+    }
+    setValidationLoading(true);
+    setValidationOutput('');
+    setValidationFindings([]);
+    const request: AiValidationRequest = {
+      projectId,
+      text: validationText,
+      includePlotReminders: true,
+      retrievalMode: 'hybrid',
+      topK: 5
+    };
+    // 流式版本会在主进程自行计算基础校验，这里传入空壳结果占位
+    const basic: ValidationResult = {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      summary: {
+        checkedCharacters: 0,
+        checkedWorldRules: 0,
+        checkedOpenPlots: 0,
+        warningCount: 0,
+        reminderCount: 0
+      },
+      findings: []
+    };
+    try {
+      await window.hetuSketch.ai.streamValidation(request, basic, (chunk: AiStreamChunk) => {
+        if (chunk.type === 'delta' && chunk.content) {
+          setValidationOutput((prev) => prev + chunk.content);
+        } else if (chunk.type === 'error') {
+          message.error(chunk.error ?? 'AI 校验出错');
+        }
+      });
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : 'AI 校验失败');
+    } finally {
+      setValidationLoading(false);
+    }
+  };
+
+  // 执行伏笔流式分析
+  const runForeshadowing = async (): Promise<void> => {
+    if (!foreshadowingText.trim()) {
+      message.warning('请输入待分析文本');
+      return;
+    }
+    setForeshadowingLoading(true);
+    setForeshadowingOutput('');
+    setForeshadowingReminders([]);
+    try {
+      await window.hetuSketch.ai.streamForeshadowing(projectId, foreshadowingText, (chunk: AiStreamChunk) => {
+        if (chunk.type === 'delta' && chunk.content) {
+          setForeshadowingOutput((prev) => prev + chunk.content);
+        } else if (chunk.type === 'error') {
+          message.error(chunk.error ?? '伏笔分析出错');
+        }
+      });
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : '伏笔分析失败');
+    } finally {
+      setForeshadowingLoading(false);
+    }
+  };
+
+  // 执行 RAG 流式问答
+  const runRag = async (): Promise<void> => {
+    if (!ragQuery.trim()) {
+      message.warning('请输入问题');
+      return;
+    }
+    setRagLoading(true);
+    setRagOutput('');
+    const request: RagQueryRequest = {
+      projectId,
+      query: ragQuery,
+      topK: 5,
+      retrievalMode: 'hybrid'
+    };
+    try {
+      await window.hetuSketch.ai.streamRagAnswer(request, (chunk: AiStreamChunk) => {
+        if (chunk.type === 'delta' && chunk.content) {
+          setRagOutput((prev) => prev + chunk.content);
+        } else if (chunk.type === 'error') {
+          message.error(chunk.error ?? 'RAG 问答出错');
+        }
+      });
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : 'RAG 问答失败');
+    } finally {
+      setRagLoading(false);
+    }
+  };
+
+  return (
+    <aside className="ai-assistant-panel">
+      <div className="ai-assistant-header">
+        <span className="ai-assistant-title"><RobotOutlined /> AI 助手</span>
+        <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
+      </div>
+      <div className="ai-assistant-body">
+        <Tabs
+          size="small"
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as typeof activeTab)}
+          items={[
+            {
+              key: 'validation',
+              label: 'AI 校验',
+              children: (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <Input.TextArea
+                    rows={4}
+                    value={validationText}
+                    onChange={(event) => setValidationText(event.target.value)}
+                    placeholder="粘贴待校验文本，或在编辑器中选中文本自动填入"
+                  />
+                  <Button block type="primary" icon={<RobotOutlined />} loading={validationLoading} onClick={() => void runValidation()}>AI 校验</Button>
+                  {validationLoading && <div className="ai-stream-loading"><Spin size="small" /> <span>正在分析...</span></div>}
+                  {validationOutput && <div className="ai-stream-output">{validationOutput}</div>}
+                  <List
+                    size="small"
+                    dataSource={validationFindings}
+                    locale={{ emptyText: 'AI 分析结果见上方文本输出' }}
+                    renderItem={(finding) => <FindingItem finding={finding} />}
+                  />
+                </Space>
+              )
+            },
+            {
+              key: 'foreshadowing',
+              label: '伏笔提醒',
+              children: (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <Input.TextArea
+                    rows={4}
+                    value={foreshadowingText}
+                    onChange={(event) => setForeshadowingText(event.target.value)}
+                    placeholder="粘贴待分析文本，或在编辑器中选中文本自动填入"
+                  />
+                  <Button block type="primary" icon={<RobotOutlined />} loading={foreshadowingLoading} onClick={() => void runForeshadowing()}>分析伏笔</Button>
+                  {foreshadowingLoading && <div className="ai-stream-loading"><Spin size="small" /> <span>正在分析...</span></div>}
+                  {foreshadowingOutput && <div className="ai-stream-output">{foreshadowingOutput}</div>}
+                  <List
+                    size="small"
+                    dataSource={foreshadowingReminders}
+                    locale={{ emptyText: 'AI 分析结果见上方文本输出' }}
+                    renderItem={(finding) => <FindingItem finding={finding} />}
+                  />
+                </Space>
+              )
+            },
+            {
+              key: 'rag',
+              label: 'RAG 问答',
+              children: (
+                <Space direction="vertical" size="small" style={{ width: '100%' }}>
+                  <Input.TextArea
+                    rows={3}
+                    value={ragQuery}
+                    onChange={(event) => setRagQuery(event.target.value)}
+                    placeholder="基于当前作品设定提问，例如：主角的红线是什么？"
+                  />
+                  <Button block type="primary" icon={<RobotOutlined />} loading={ragLoading} onClick={() => void runRag()}>提问</Button>
+                  {ragLoading && <div className="ai-stream-loading"><Spin size="small" /> <span>正在思考...</span></div>}
+                  {ragOutput && <div className="ai-stream-output">{ragOutput}</div>}
+                </Space>
+              )
+            }
+          ]}
+        />
+      </div>
+    </aside>
+  );
+}
+
+// Finding 卡片项：复用校验结果的展示样式
+function FindingItem({ finding }: { finding: ValidationFinding }): React.JSX.Element {
+  return (
+    <List.Item>
+      <List.Item.Meta
+        title={<Space><Tag color={finding.severity === 'warning' ? 'red' : 'blue'}>{finding.severity === 'warning' ? '警告' : '提醒'}</Tag><span>{finding.title}</span></Space>}
+        description={finding.message}
+      />
+    </List.Item>
   );
 }
 

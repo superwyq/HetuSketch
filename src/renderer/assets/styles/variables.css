@@ -1,0 +1,13 @@
+/**
+ * HetuSketch Design Tokens — Entry Point
+ *
+ * Imports all token source files in order. Import this file once from the
+ * application root to make all design tokens available globally.
+ *
+ * Token sources live under ./tokens/ (see docs/DESIGN.md §2–§7).
+ */
+
+@import './tokens/colors.css';
+@import './tokens/typography.css';
+@import './tokens/shadows.css';
+@import './tokens/radii.css';

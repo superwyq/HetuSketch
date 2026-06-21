@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ProjectManifest } from '@shared/storageTypes';
+import type { AiConfig, ProjectManifest, VectorIndexState } from '@shared/storageTypes';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -7,6 +7,11 @@ export interface FontSettings {
   family: string;
   size: number;
   color: string;
+}
+
+export interface AiCapabilities {
+  llmReady: boolean;
+  embeddingReady: boolean;
 }
 
 export interface AppState {
@@ -20,6 +25,9 @@ export interface AppState {
   editorFont: FontSettings;
   systemFonts: string[];
   systemFontsLoaded: boolean;
+  aiConfig?: AiConfig;
+  aiCapabilities: AiCapabilities;
+  ragState?: VectorIndexState;
   setThemeMode: (themeMode: ThemeMode) => void;
   setSelectedProject: (project?: ProjectManifest) => void;
   setSearchKeyword: (keyword: string) => void;
@@ -33,6 +41,9 @@ export interface AppState {
   refreshSidebar: () => void;
   tabNameMap: Record<string, string>;
   updateTabNameMap: (chapters: { id: string; title?: string }[], entries: { id: string; title?: string }[]) => void;
+  loadAiConfig: () => Promise<void>;
+  loadRagState: (projectId: string) => Promise<void>;
+  isAiReady: () => boolean;
 }
 
 const FONT_STORAGE_KEY = 'hetusketch.workbench.fonts.v1';
@@ -61,6 +72,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   editorFont: defaultFontSettings.editor,
   systemFonts: [],
   systemFontsLoaded: false,
+  aiConfig: undefined,
+  aiCapabilities: { llmReady: false, embeddingReady: false },
+  ragState: undefined,
   sidebarRevision: 0,
   refreshSidebar: () => set((state) => ({ sidebarRevision: state.sidebarRevision + 1 })),
   tabNameMap: {},
@@ -105,7 +119,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     void api.system.fonts()
       .then((fonts) => set({ systemFonts: fonts.slice(0, 300), systemFontsLoaded: true }))
       .catch(() => set({ systemFonts: [], systemFontsLoaded: true }));
-  }
+  },
+  loadAiConfig: async () => {
+    const api = typeof window !== 'undefined' ? window.hetuSketch : undefined;
+    if (!api?.ai?.getConfig) return;
+    try {
+      const config = await api.ai.getConfig();
+      set({
+        aiConfig: config,
+        aiCapabilities: {
+          llmReady: config.llm.enabled && config.llm.apiKeySet,
+          embeddingReady: config.embedding.enabled && config.embedding.apiKeySet
+        }
+      });
+    } catch {
+      // ignore
+    }
+  },
+  loadRagState: async (projectId) => {
+    const api = typeof window !== 'undefined' ? window.hetuSketch : undefined;
+    if (!api?.rag?.state) return;
+    try {
+      const state = await api.rag.state(projectId);
+      set({ ragState: state });
+    } catch {
+      // ignore
+    }
+  },
+  isAiReady: () => get().aiCapabilities.llmReady
 }));
 
 function readFontSettings(): { sidebar: FontSettings; editor: FontSettings } {

@@ -1,10 +1,14 @@
 import {
+  ApiOutlined,
   BranchesOutlined,
   CloseOutlined,
+  CloudOutlined,
   CodeOutlined,
   EditOutlined,
   FolderOpenOutlined,
+  FontSizeOutlined,
   GlobalOutlined,
+  InfoOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
@@ -12,6 +16,7 @@ import {
   PlusOutlined,
   PushpinOutlined,
   ReloadOutlined,
+  RobotOutlined,
   SearchOutlined,
   SettingOutlined,
   SplitCellsOutlined,
@@ -31,7 +36,7 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { QuickLookupPage } from './pages/QuickLookupPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { WritingStudioPage } from './pages/WritingStudioPage';
-import { ensureDefaultBook, listChapters, reorderChapter, type ChapterNode, upsertChapter } from './iterationStore';
+import { ensureDefaultBook, listChapters, reorderChapter, type ChapterNode, type ChapterStatus, upsertChapter } from './iterationStore';
 import { useAppStore } from './store/appStore';
 
 const ACTIVITY_DEFAULT_ORDER = ['search', 'characters', 'worlds', 'plots', 'editor', 'projects', 'settings'] as const;
@@ -87,8 +92,13 @@ interface TreeNodeItem {
   path?: string;
   kind?: 'folder' | 'entry' | 'book' | 'volume' | 'chapter';
   entryType?: EntryType;
+  status?: ChapterStatus;
   readonly?: boolean;
   children?: TreeNodeItem[];
+  /** 渲染为分组分隔线（忽略其他字段） */
+  divider?: boolean;
+  /** 节点前导图标 */
+  icon?: React.ReactNode;
 }
 
 interface SidebarFolderNode {
@@ -280,7 +290,7 @@ export function App(): React.JSX.Element {
 
   return (
     <div
-      className={`workbench-shell theme-${themeMode}`}
+      className={`workbench-shell ${themeMode === 'light' ? 'theme-light' : ''}`}
       style={{
         '--primary-sidebar-width': `${layout.primaryVisible ? layout.primaryWidth : 0}px`,
         '--secondary-sidebar-width': `${layout.secondaryVisible ? layout.secondaryWidth : 0}px`,
@@ -491,6 +501,12 @@ function ActivityBar({
 }): React.JSX.Element {
   const mainItems = items.filter((item) => item.id !== 'settings');
   const bottomItems = items.filter((item) => item.id === 'settings');
+  const entityTypeOf = (id: ActivityId): 'character' | 'world' | 'plot' | 'primary' => {
+    if (id === 'characters') return 'character';
+    if (id === 'worlds') return 'world';
+    if (id === 'plots') return 'plot';
+    return 'primary';
+  };
   return (
     <nav className="activity-bar" aria-label="活动栏">
       <div className="activity-main">
@@ -498,6 +514,7 @@ function ActivityBar({
           <Tooltip key={item.id} placement="right" title={item.label}>
             <button
               className={`activity-button ${activeId === item.id ? 'is-active' : ''} ${draggingId === item.id ? 'is-dragging' : ''}`}
+              data-entity-type={entityTypeOf(item.id)}
               draggable
               onClick={() => onOpen(item)}
               onDragStart={() => onDragStart(item.id)}
@@ -519,11 +536,11 @@ function ActivityBar({
       </div>
       <div className="activity-bottom">
         <Tooltip placement="right" title="账户">
-          <button className="activity-button" aria-label="账户"><UserOutlined /></button>
+          <button className="activity-button" data-entity-type="primary" aria-label="账户"><UserOutlined /></button>
         </Tooltip>
         {bottomItems.map((item) => (
           <Tooltip key={item.id} placement="right" title={item.label}>
-            <button className={`activity-button ${activeId === item.id ? 'is-active' : ''}`} onClick={() => onOpen(item)} aria-label={item.label}>{item.icon}</button>
+            <button className={`activity-button ${activeId === item.id ? 'is-active' : ''}`} data-entity-type={entityTypeOf(item.id)} onClick={() => onOpen(item)} aria-label={item.label}>{item.icon}</button>
           </Tooltip>
         ))}
       </div>
@@ -725,6 +742,7 @@ function SidebarView({
     const params = new URLSearchParams(location.search);
     if (activeId === 'editor') return params.get('chapter') ?? undefined;
     if (activeId === 'characters' || activeId === 'worlds') return params.get('entry') ?? params.get('folder') ?? undefined;
+    if (activeId === 'settings') return params.get('section') ? `settings-${params.get('section')}` : undefined;
     return undefined;
   }, [activeId, location.search]);
 
@@ -744,7 +762,18 @@ function SidebarView({
     return <TreeSection title="BOOKS" nodes={[{ id: 'books-local', label: '本地书目', path: '/projects' }, { id: 'books-import', label: '导入导出', path: '/projects' }, { id: 'books-binding', label: '绑定设定集', path: '/projects' }]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'settings') {
-    return <TreeSection title="SETTINGS" nodes={[{ id: 'ai-config', label: 'AI 配置', path: '/settings' }, { id: 'prompts', label: '提示词', path: '/settings' }, { id: 'http-tools', label: 'HTTP 工具', path: '/settings' }, { id: 'shortcuts', label: '快捷键', path: '/settings' }]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="SETTINGS" nodes={[
+      { id: 'settings-ai', label: 'AI 服务', path: '/settings?section=ai', icon: <CloudOutlined /> },
+      { id: 'settings-divider-1', label: '', divider: true },
+      { id: 'settings-general', label: '通用', path: '/settings?section=general', icon: <SettingOutlined /> },
+      { id: 'settings-display', label: '显示', path: '/settings?section=display', icon: <FontSizeOutlined /> },
+      { id: 'settings-divider-2', label: '', divider: true },
+      { id: 'settings-agents', label: '智能体', path: '/settings?section=agents', icon: <RobotOutlined /> },
+      { id: 'settings-skills', label: '技能开关', path: '/settings?section=skills', icon: <ThunderboltOutlined /> },
+      { id: 'settings-tools', label: 'HTTP 工具', path: '/settings?section=tools', icon: <ApiOutlined /> },
+      { id: 'settings-divider-3', label: '', divider: true },
+      { id: 'settings-about', label: '关于', path: '/settings?section=about', icon: <InfoOutlined /> }
+    ]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   return <TreeSection title="SEARCH" nodes={[{ id: 'search-global', label: '全局搜索', path: '/search' }]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
 }
@@ -761,7 +790,7 @@ function TreeSection({ title, nodes, selectedId, draggingTreeNode, onNavigate, o
 function TreeNodeList({ nodes, level, selectedId, draggingTreeNode, onNavigate, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { nodes: TreeNodeItem[]; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
   return (
     <div className="tree-node-list" role={level === 0 ? 'tree' : 'group'}>
-      {nodes.map((node) => <TreeNode key={node.id} node={node} level={level} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />)}
+      {nodes.map((node) => node.divider ? <div key={node.id} className="tree-divider" role="separator" /> : <TreeNode key={node.id} node={node} level={level} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />)}
     </div>
   );
 }
@@ -866,6 +895,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onTre
       >
         <button
           className={`tree-row tree-row-${node.kind ?? 'item'} ${isSelected ? 'is-selected' : ''} ${isReadonly ? 'is-readonly' : ''}`}
+          data-entity-type={node.entryType}
           draggable={node.kind === 'entry' || (node.kind === 'folder' && !node.readonly) || node.kind === 'chapter' || node.kind === 'volume'}
           style={{ '--tree-level': level } as React.CSSProperties}
           title={node.label}
@@ -874,7 +904,9 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onTre
           onDragStart={() => onTreeDragStart({ nodeId: node.id, nodeKind: node.kind, entryType: node.entryType })}
           onDragEnd={() => onTreeDragStart(undefined)}
         >
-          <span className={`tree-twist ${expanded ? 'is-expanded' : ''}`}>{hasChildren || node.kind === 'folder' ? '▸' : '·'}</span>
+          <span className={`tree-twist ${expanded ? 'is-expanded' : ''}`}>{hasChildren || node.kind === 'folder' ? '▸' : (node.icon ? '' : '·')}</span>
+          {node.kind === 'chapter' && node.status ? <span className="tree-status-dot" data-chapter-status={node.status} aria-hidden="true" /> : null}
+          {node.icon ? <span className="tree-icon">{node.icon}</span> : null}
           {isEditing ? (
             <Input
               className="tree-edit-input"
@@ -918,6 +950,7 @@ function buildChapterChildren(chapters: ChapterNode[], parentId?: string, rootBo
       label: item.title,
       path: item.kind === 'chapter' ? `/workspace/editor?chapter=${encodeURIComponent(item.id)}` : '/workspace/editor',
       kind: item.kind,
+      status: item.status,
       children: buildChapterChildren(chapters, item.id, rootBookId)
     }));
 }

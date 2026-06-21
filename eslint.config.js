@@ -20,7 +20,7 @@ const nodeGlobals = {
 
 export default [
   {
-    ignores: ['out', 'dist', 'release', 'node_modules', 'creation-assistant']
+    ignores: ['out', 'dist', 'release', 'node_modules', 'creation-assistant', 'reference']
   },
   {
     files: ['**/*.{ts,tsx}'],
@@ -41,6 +41,7 @@ export default [
       ...reactHooks.configs.recommended.rules,
       '@typescript-eslint/consistent-type-imports': 'error',
       '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }]
     }
   },
