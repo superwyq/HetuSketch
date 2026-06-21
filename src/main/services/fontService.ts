@@ -1,46 +1,59 @@
-import { execSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const FALLBACK_FONTS = ['Microsoft YaHei', 'SimSun', 'SimHei', 'PingFang SC', 'Hiragino Sans GB', 'WenQuanYi Micro Hei', 'Arial', 'Times New Roman', 'Courier New'];
 
-export function getSystemFonts(): string[] {
+// 进程内缓存：字体列表在一次会话中基本不变，避免重复启动 PowerShell/fc-list
+let cachedFonts: string[] | undefined;
+
+export async function getSystemFonts(): Promise<string[]> {
+  if (cachedFonts) return cachedFonts;
   try {
     const os = platform();
     if (os === 'win32') {
-      return listWindowsFonts();
+      cachedFonts = await listWindowsFonts();
+    } else if (os === 'darwin') {
+      cachedFonts = await listMacFonts();
+    } else {
+      cachedFonts = await listLinuxFonts();
     }
-    if (os === 'darwin') {
-      return listMacFonts();
-    }
-    return listLinuxFonts();
+    return cachedFonts;
   } catch {
-    return [...FALLBACK_FONTS];
+    cachedFonts = [...FALLBACK_FONTS];
+    return cachedFonts;
   }
 }
 
-function listWindowsFonts(): string[] {
-  const command = 'powershell -command "Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families.Name"';
-  const output = execSync(command, { encoding: 'utf-8', timeout: 10000 });
-  return dedupeFonts(output.split('\n').map((line) => line.trim()).filter(Boolean));
+async function listWindowsFonts(): Promise<string[]> {
+  // 使用异步 execFile 替代 execSync，避免阻塞主进程事件循环
+  const { stdout } = await execFileAsync(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-command', 'Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families.Name'],
+    { encoding: 'utf-8', timeout: 10000, windowsHide: true }
+  );
+  return dedupeFonts(stdout.split('\n').map((line) => line.trim()).filter(Boolean));
 }
 
-function listMacFonts(): string[] {
+async function listMacFonts(): Promise<string[]> {
   try {
-    const output = execSync('fc-list : family', { encoding: 'utf-8', timeout: 10000 });
-    return parseFontconfig(output);
+    const { stdout } = await execFileAsync('fc-list', [':', 'family'], { encoding: 'utf-8', timeout: 10000 });
+    return parseFontconfig(stdout);
   } catch {
-    const output = execSync('system_profiler SPFontsDataType', { encoding: 'utf-8', timeout: 10000 });
+    const { stdout } = await execFileAsync('system_profiler', ['SPFontsDataType'], { encoding: 'utf-8', timeout: 10000 });
     return dedupeFonts(
-      output.split('\n')
+      stdout.split('\n')
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('Location:') && !line.startsWith('Type:') && !line.startsWith('Version:') && !line.startsWith('Valid:'))
     );
   }
 }
 
-function listLinuxFonts(): string[] {
-  const output = execSync('fc-list : family', { encoding: 'utf-8', timeout: 10000 });
-  return parseFontconfig(output);
+async function listLinuxFonts(): Promise<string[]> {
+  const { stdout } = await execFileAsync('fc-list', [':', 'family'], { encoding: 'utf-8', timeout: 10000 });
+  return parseFontconfig(stdout);
 }
 
 function parseFontconfig(output: string): string[] {

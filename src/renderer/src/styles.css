@@ -2007,6 +2007,14 @@ button {
   font-size: 36px;
 }
 
+.page-suspense-fallback {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  color: var(--color-foreground-muted);
+  font-size: 13px;
+}
+
 @media (max-width: 1180px) {
   .workbench-shell {
     grid-template-columns: var(--activity-width) minmax(0, 1fr) var(--sash-size) 0;

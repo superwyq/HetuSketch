@@ -27,15 +27,20 @@ import {
 } from '@ant-design/icons';
 import { AutoComplete, Badge, Button, Card, Dropdown, Empty, Input, Select, Space, Switch, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { EntryType, ProjectEntry, ProjectManifest, SearchResultItem } from '@shared/storageTypes';
-import { DashboardPage } from './pages/DashboardPage';
-import { EntriesPage } from './pages/EntriesPage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { QuickLookupPage } from './pages/QuickLookupPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { WritingStudioPage } from './pages/WritingStudioPage';
+// 页面按需加载：将各功能页拆分为独立 chunk，显著缩小主包体积，加快首屏
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
+const EntriesPage = lazy(() => import('./pages/EntriesPage').then((m) => ({ default: m.EntriesPage })));
+const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const QuickLookupPage = lazy(() => import('./pages/QuickLookupPage').then((m) => ({ default: m.QuickLookupPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const WritingStudioPage = lazy(() => import('./pages/WritingStudioPage').then((m) => ({ default: m.WritingStudioPage })));
+
+function PageFallback(): React.JSX.Element {
+  return <div className="page-suspense-fallback" role="status" aria-label="加载中">加载中…</div>;
+}
 import { ensureDefaultBook, listChapters, reorderChapter, type ChapterNode, type ChapterStatus, upsertChapter } from './iterationStore';
 import { useAppStore } from './store/appStore';
 
@@ -285,7 +290,11 @@ export function App(): React.JSX.Element {
   const navigateInCurrentTab = useCallback((path: string) => navigate(path, { state: { replaceTab: true } }), [navigate]);
 
   if (location.pathname === '/quick-lookup') {
-    return <QuickLookupPage />;
+    return (
+      <Suspense fallback={<PageFallback />}>
+        <QuickLookupPage />
+      </Suspense>
+    );
   }
 
   return (
@@ -1145,21 +1154,21 @@ function EditorWorkbench({ splitMode, onSplitModeChange }: { splitMode: Workbenc
       >
         <Routes>
           <Route path="/" element={<Navigate to="/workspace/editor" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard" element={<Suspense fallback={<PageFallback />}><DashboardPage /></Suspense>} />
           <Route path="/workspace/data" element={<Navigate to="/data/characters" replace />} />
-          <Route path="/data/characters" element={<CharactersDataPage />} />
-          <Route path="/data/worlds" element={<WorldSettingsDataPage />} />
-          <Route path="/data/plots" element={<LimitedDatabasePage />} />
-          <Route path="/workspace/editor" element={<TextEditorWorkspacePage />} />
+          <Route path="/data/characters" element={<Suspense fallback={<PageFallback />}><CharactersDataPage /></Suspense>} />
+          <Route path="/data/worlds" element={<Suspense fallback={<PageFallback />}><WorldSettingsDataPage /></Suspense>} />
+          <Route path="/data/plots" element={<Suspense fallback={<PageFallback />}><LimitedDatabasePage /></Suspense>} />
+          <Route path="/workspace/editor" element={<Suspense fallback={<PageFallback />}><TextEditorWorkspacePage /></Suspense>} />
           <Route path="/setting-sets" element={<Navigate to="/data/characters" replace />} />
           <Route path="/characters" element={<Navigate to="/data/characters" replace />} />
           <Route path="/worlds" element={<Navigate to="/data/worlds" replace />} />
           <Route path="/plots" element={<Navigate to="/data/plots" replace />} />
           <Route path="/studio" element={<Navigate to="/workspace/editor" replace />} />
           <Route path="/checks" element={<Navigate to="/workspace/editor" replace />} />
-          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects" element={<Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense>} />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings" element={<Suspense fallback={<PageFallback />}><SettingsPage /></Suspense>} />
         </Routes>
       </EditorGroup>
       {secondaryCount >= 1 && (
@@ -1225,17 +1234,19 @@ function normalizePathname(pathname: string): string {
 
 function renderPageContent(path: string): ReactNode {
   const [pathname] = path.split('?');
+  let content: ReactNode;
   switch (normalizePathname(pathname)) {
-    case '/dashboard': return <DashboardPage />;
-    case '/data/characters': return <CharactersDataPage />;
-    case '/data/worlds': return <WorldSettingsDataPage />;
-    case '/data/plots': return <LimitedDatabasePage />;
-    case '/workspace/editor': return <TextEditorWorkspacePage />;
-    case '/projects': return <ProjectsPage />;
-    case '/search': return <SearchPage />;
-    case '/settings': return <SettingsPage />;
-    default: return <WorkbenchWelcome />;
+    case '/dashboard': content = <DashboardPage />; break;
+    case '/data/characters': content = <CharactersDataPage />; break;
+    case '/data/worlds': content = <WorldSettingsDataPage />; break;
+    case '/data/plots': content = <LimitedDatabasePage />; break;
+    case '/workspace/editor': content = <TextEditorWorkspacePage />; break;
+    case '/projects': content = <ProjectsPage />; break;
+    case '/search': content = <SearchPage />; break;
+    case '/settings': content = <SettingsPage />; break;
+    default: content = <WorkbenchWelcome />; break;
   }
+  return <Suspense fallback={<PageFallback />}>{content}</Suspense>;
 }
 
 function readSecondaryGroups(): SecondaryGroupState[] {
@@ -1539,9 +1550,9 @@ function BottomPanel({ visible, activeTab, onActiveTabChange, onToggle }: { visi
 
 function PanelContent({ activeTab }: { activeTab: PanelTabId }): React.JSX.Element {
   if (activeTab === 'ai') return <Card size="small"><Typography.Text>AI 建议、校验提示和采纳记录会显示在这里。</Typography.Text></Card>;
-  if (activeTab === 'characters') return <EntriesPage type="character" />;
-  if (activeTab === 'worlds') return <EntriesPage type="world" />;
-  if (activeTab === 'plots') return <EntriesPage type="plot" />;
+  if (activeTab === 'characters') return <Suspense fallback={<PageFallback />}><EntriesPage type="character" /></Suspense>;
+  if (activeTab === 'worlds') return <Suspense fallback={<PageFallback />}><EntriesPage type="world" /></Suspense>;
+  if (activeTab === 'plots') return <Suspense fallback={<PageFallback />}><EntriesPage type="plot" /></Suspense>;
   return <Card size="small"><pre className="panel-output">Workbench ready. Layout restored from local storage.</pre></Card>;
 }
 
