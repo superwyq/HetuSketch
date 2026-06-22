@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createCipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir, userInfo } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CharacterEntry } from '../../shared/storageTypes.js';
 import { StorageService } from './storageService.js';
@@ -43,6 +44,14 @@ async function collectChunks<T>(gen: AsyncGenerator<T>): Promise<T[]> {
     chunks.push(chunk);
   }
   return chunks;
+}
+
+function encryptLegacyApiKey(plainText: string, scope: string): string {
+  const key = scryptSync(`${userInfo().username}:${hostname()}:${scope}`, createHash('sha256').update(scope).digest('hex'), 32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64');
 }
 
 describe('StorageService', () => {
@@ -670,6 +679,128 @@ describe('StorageService', () => {
 
     // 不应调用工具端点
     expect(fetchCalls.some((url) => url === 'https://tool.example/callback')).toBe(false);
+
+    await service.close();
+  });
+
+  it('blocks SSRF-prone HTTP tool targets before saving or executing', async () => {
+    const service = new StorageService(await createTempRoot());
+    await service.initialize();
+
+    const blockedUrls = [
+      'http://localhost:3000/callback',
+      'http://127.0.0.1:8080/callback',
+      'http://[::1]/callback',
+      'http://0.0.0.0/callback',
+      'http://10.1.2.3/callback',
+      'http://172.16.0.1/callback',
+      'http://192.168.1.1/callback',
+      'http://169.254.169.254/latest/meta-data',
+      'http://[fc00::1]/callback',
+      'http://[fe80::1]/callback'
+    ];
+
+    for (const url of blockedUrls) {
+      expect(() => service.saveHttpTool({ name: 'bad', url })).toThrow(/目标被阻断/);
+    }
+
+    await service.close();
+  });
+
+  it('blocks unsafe HTTP tool redirects and records audit reasons', async () => {
+    const fetchCalls: string[] = [];
+    const service = new StorageService(await createTempRoot(), {
+      encryptionScope: 'test-http-redirect-block',
+      fetch: async (input, init) => {
+        const url = String(input);
+        fetchCalls.push(url);
+        if (url === 'https://tool.example/callback') {
+          expect(init?.redirect).toBe('manual');
+          return new Response('', { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
+        }
+        const body = init?.body ? JSON.parse(String(init.body)) as { messages?: Array<Record<string, unknown>> } : {};
+        const isToolResult = body.messages?.[body.messages.length - 1]?.role === 'tool';
+        return buildJsonResponse({
+          choices: [{ message: isToolResult ? { role: 'assistant', content: '{"findings":[]}' } : { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', function: { name: 'notify_tool', arguments: '{"input":"x"}' } }] } }]
+        });
+      }
+    });
+    await service.initialize();
+    const project = await service.createProject({ id: 'tool-redirect-book', name: '重定向阻断作品', type: 'original' });
+    await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' } });
+    service.saveHttpTool({ id: 'notify_tool', name: '通知工具', url: 'https://tool.example/callback', method: 'POST', enabled: true });
+    service.saveAiSkills([{ id: 'http_tools', enabled: true }]);
+
+    const result = await service.validateContentEnhanced({ projectId: project.id, text: '内容。' });
+
+    expect(result.status).toBe('ok');
+    expect(fetchCalls).not.toContain('http://169.254.169.254/latest/meta-data');
+    expect(service.aiService.getHttpToolAuditLog()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'reject', reason: expect.stringMatching(/目标被阻断/) })
+    ]));
+
+    await service.close();
+  });
+
+  it('limits HTTP tool response MIME type and size', async () => {
+    const service = new StorageService(await createTempRoot(), {
+      encryptionScope: 'test-http-response-limits',
+      fetch: async (input, init) => {
+        const url = String(input);
+        if (url === 'https://tool.example/callback') {
+          return new Response('not allowed', { status: 200, headers: { 'content-type': 'text/html' } });
+        }
+        if (url === 'https://tool.example/large') {
+          return new Response('x'.repeat(70 * 1024), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        const body = init?.body ? JSON.parse(String(init.body)) as { messages?: Array<Record<string, unknown>> } : {};
+        const toolResults = body.messages?.filter((m) => m.role === 'tool').map((m) => String(m.content ?? '')) ?? [];
+        const toolCallName = toolResults.length === 0 ? 'bad_mime_tool' : toolResults.length === 1 ? 'large_tool' : undefined;
+        if (toolCallName) {
+          return buildJsonResponse({ choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: `call_${toolResults.length + 1}`, function: { name: toolCallName, arguments: '{"input":"x"}' } }] } }] });
+        }
+        return buildJsonResponse({ choices: [{ message: { role: 'assistant', content: '{"findings":[]}' } }] });
+      }
+    });
+    await service.initialize();
+    const project = await service.createProject({ id: 'tool-limit-book', name: '响应限制作品', type: 'original' });
+    await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' } });
+    service.saveHttpTool({ id: 'bad_mime_tool', name: 'MIME 工具', url: 'https://tool.example/callback', method: 'POST', enabled: true });
+    service.saveHttpTool({ id: 'large_tool', name: '大响应工具', url: 'https://tool.example/large', method: 'POST', enabled: true });
+    service.saveAiSkills([{ id: 'http_tools', enabled: true }]);
+
+    await service.validateContentEnhanced({ projectId: project.id, text: '内容。' });
+
+    const reasons = service.aiService.getHttpToolAuditLog().filter((entry) => entry.action === 'reject').map((entry) => entry.reason);
+    expect(reasons).toEqual(expect.arrayContaining([
+      expect.stringMatching(/MIME 不被允许/),
+      expect.stringMatching(/响应超过大小限制/)
+    ]));
+
+    await service.close();
+  });
+
+  it('loads legacy AES-GCM API key ciphertext and never exposes plaintext key', async () => {
+    const scope = 'test-legacy-ciphertext';
+    const service = new StorageService(await createTempRoot(), {
+      encryptionScope: scope,
+      fetch: async (_input, init) => {
+        expect(String(init?.headers instanceof Headers ? init.headers.get('authorization') : (init?.headers as Record<string, string>)?.authorization)).toContain('legacy-key');
+        return buildJsonResponse({ data: [{ id: 'legacy-model' }] });
+      }
+    });
+    await service.initialize();
+
+    const legacyCiphertext = encryptLegacyApiKey('legacy-key', scope);
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai', baseUrl: 'https://api.example/v1', model: 'legacy-model', apiKey: 'temporary-key' } });
+    const record = JSON.parse(String(service['indexDb'].getConfigRecord('ai.llm'))) as Record<string, unknown>;
+    service['indexDb'].setConfigRecord('ai.llm', JSON.stringify({ ...record, encryptedApiKey: legacyCiphertext }));
+
+    expect(service.getAiConfig().llm).toMatchObject({ enabled: true, apiKeySet: true, model: 'legacy-model' });
+    expect(JSON.stringify(service.getAiConfig())).not.toContain('legacy-key');
+    await expect(service.listAiModels('llm')).resolves.toEqual([{ id: 'legacy-model' }]);
 
     await service.close();
   });

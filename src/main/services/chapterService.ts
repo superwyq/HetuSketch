@@ -154,6 +154,9 @@ export class ChapterService {
   }
 
   async deleteVolume(bookId: string, volumeId: string): Promise<void> {
+    const tree = await this.listTree(bookId).catch(() => undefined);
+    const childChapters = tree?.chapters.filter((chapter) => chapter.volumeId === volumeId) ?? [];
+    await Promise.all(childChapters.map((chapter) => this.deleteChapter(bookId, chapter.id)));
     const filePath = getVolumeFilePath(this.paths, bookId, volumeId);
     await unlink(filePath).catch(() => undefined);
   }

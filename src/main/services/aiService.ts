@@ -1,5 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
+import { isIP } from 'node:net';
 import { hostname, userInfo } from 'node:os';
+import { createRequire } from 'node:module';
 import type {
   AiAgentResponse,
   AiConfig,
@@ -45,6 +47,12 @@ import {
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
+type SafeStorageLike = {
+  isEncryptionAvailable: () => boolean;
+  encryptString: (plainText: string) => Buffer;
+  decryptString: (encrypted: Buffer) => string;
+};
+
 export interface AiServiceOptions {
   fetch?: FetchLike;
   encryptionScope?: string;
@@ -70,6 +78,20 @@ const DEFAULT_SCENARIO_PROMPTS: AiPromptConfig['scenarios'] = {
   foreshadowing: '识别文本中涉及的未回收伏笔，提醒推进、冲突或遗忘风险。返回 reminders 数组。',
   rag_qa: '只依据提供的设定上下文回答问题。若上下文不足，请说明无法确认。返回 answer 与 citations。'
 };
+
+const HTTP_TOOL_MAX_REDIRECTS = 3;
+const HTTP_TOOL_MAX_RESPONSE_BYTES = 64 * 1024;
+const HTTP_TOOL_ALLOWED_MIME_TYPES = [
+  'application/json',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/problem+json'
+];
+const HTTP_TOOL_AUDIT_LOG_LIMIT = 100;
+const SAFE_STORAGE_PREFIX = 'safe:v1:';
+const AES_GCM_PREFIX = 'aes-gcm:v1:';
+const requireOptional = createRequire(import.meta.url);
 
 const DEFAULT_SKILLS: AiSkillConfig[] = [
   { id: 'basic_rule_check', name: '基础规则校验', description: '本地匹配角色红线、世界观规则与伏笔', enabled: true, builtIn: true },
@@ -133,6 +155,7 @@ const DEFAULT_AGENTS: AgentConfig[] = [
 export class AiService {
   private readonly fetchImpl: FetchLike;
   private readonly keyMaterial: Buffer;
+  private readonly httpToolAuditLog: Array<{ timestamp: string; toolId: string; url: string; action: 'allow' | 'reject'; reason: string }> = [];
 
   constructor(
     private readonly indexDb: IndexDatabase,
@@ -223,6 +246,10 @@ export class AiService {
 
   saveHttpTool(input: HttpToolSaveInput): HttpToolConfig {
     const url = assertHttpUrl(input.url);
+    const targetValidation = validateHttpToolTarget(url);
+    if (!targetValidation.ok) {
+      throw new Error(targetValidation.reason);
+    }
     const tool: HttpToolConfig = {
       id: input.id ? sanitizeId(input.id) : randomUUID(),
       name: input.name.trim().slice(0, 80),
@@ -240,6 +267,10 @@ export class AiService {
 
   deleteHttpTool(toolId: string): void {
     this.indexDb.deleteHttpTool(sanitizeId(toolId));
+  }
+
+  getHttpToolAuditLog(): Array<{ timestamp: string; toolId: string; url: string; action: 'allow' | 'reject'; reason: string }> {
+    return [...this.httpToolAuditLog];
   }
 
   listAgents(): AgentConfig[] {
@@ -394,7 +425,7 @@ export class AiService {
     const records: VectorChunkInput[] = [];
     const warnings: string[] = [];
 
-    for (const chunk of chunks) {
+    await runLimited(chunks, 4, async (chunk) => {
       try {
         const embedding = await this.embedText(chunk.text);
         records.push({ ...chunk, embedding });
@@ -402,7 +433,7 @@ export class AiService {
       } catch (error) {
         warnings.push(`分块 ${chunk.entryId}:${chunk.chunkIndex} 嵌入失败：${summarizeError(error)}`);
       }
-    }
+    });
 
     this.indexDb.replaceVectorChunks(projectId, records, config.model);
     const state: VectorIndexState = {
@@ -790,7 +821,7 @@ export class AiService {
     }
 
     if (input.apiKey !== undefined) {
-      next.encryptedApiKey = input.apiKey ? encrypt(input.apiKey, this.keyMaterial) : '';
+      next.encryptedApiKey = input.apiKey ? encryptSecret(input.apiKey, this.keyMaterial) : '';
     }
 
     return next;
@@ -940,21 +971,79 @@ export class AiService {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), tool.timeoutMs);
     try {
-      const init: RequestInit = {
-        method: tool.method,
-        headers: { 'content-type': 'application/json', ...tool.headers },
-        signal: controller.signal
-      };
-      if (tool.method === 'POST') {
-        init.body = args;
+      let currentUrl = assertHttpUrl(tool.url);
+      for (let redirectCount = 0; redirectCount <= HTTP_TOOL_MAX_REDIRECTS;) {
+        const validation = validateHttpToolTarget(currentUrl);
+        if (!validation.ok) {
+          this.auditHttpTool(tool.id, currentUrl, 'reject', validation.reason);
+          return JSON.stringify({ error: validation.reason });
+        }
+
+        const init: RequestInit = {
+          method: tool.method,
+          headers: { 'content-type': 'application/json', ...tool.headers },
+          redirect: 'manual',
+          signal: controller.signal
+        };
+        if (tool.method === 'POST') {
+          init.body = args;
+        }
+
+        this.auditHttpTool(tool.id, currentUrl, 'allow', 'request');
+        const response = await this.fetchImpl(currentUrl, init);
+        if (isRedirectStatus(response.status)) {
+          const location = response.headers.get('location');
+          if (!location) {
+            const reason = `HTTP 工具重定向缺少 Location: ${response.status}`;
+            this.auditHttpTool(tool.id, currentUrl, 'reject', reason);
+            return JSON.stringify({ error: reason });
+          }
+          if (redirectCount >= HTTP_TOOL_MAX_REDIRECTS) {
+            const reason = 'HTTP 工具重定向次数过多';
+            this.auditHttpTool(tool.id, currentUrl, 'reject', reason);
+            return JSON.stringify({ error: reason });
+          }
+          const nextUrl = new URL(location, currentUrl).toString();
+          const redirectValidation = validateHttpToolRedirect(currentUrl, nextUrl);
+          if (!redirectValidation.ok) {
+            this.auditHttpTool(tool.id, nextUrl, 'reject', redirectValidation.reason);
+            return JSON.stringify({ error: redirectValidation.reason });
+          }
+          redirectCount += 1;
+          currentUrl = nextUrl;
+          continue;
+        }
+
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!isAllowedHttpToolMime(contentType)) {
+          const reason = `HTTP 工具响应 MIME 不被允许: ${contentType || 'unknown'}`;
+          this.auditHttpTool(tool.id, currentUrl, 'reject', reason);
+          return JSON.stringify({ error: reason });
+        }
+        const text = await readLimitedResponseText(response, HTTP_TOOL_MAX_RESPONSE_BYTES);
+        return text.slice(0, 4_000);
       }
-      const response = await this.fetchImpl(tool.url, init);
-      const text = await response.text();
-      return text.slice(0, 4_000);
+
+      const reason = 'HTTP 工具重定向次数过多';
+      this.auditHttpTool(tool.id, tool.url, 'reject', reason);
+      return JSON.stringify({ error: reason });
     } catch (error) {
-      return JSON.stringify({ error: summarizeError(error) });
+      const reason = summarizeError(error);
+      this.auditHttpTool(tool.id, tool.url, 'reject', reason);
+      return JSON.stringify({ error: reason });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  private auditHttpTool(toolId: string, url: string, action: 'allow' | 'reject', reason: string): void {
+    const entry = { timestamp: new Date().toISOString(), toolId, url, action, reason };
+    this.httpToolAuditLog.push(entry);
+    if (this.httpToolAuditLog.length > HTTP_TOOL_AUDIT_LOG_LIMIT) {
+      this.httpToolAuditLog.splice(0, this.httpToolAuditLog.length - HTTP_TOOL_AUDIT_LOG_LIMIT);
+    }
+    if (action === 'reject') {
+      console.warn('[AiService] HTTP tool request rejected', entry);
     }
   }
 
@@ -1100,7 +1189,7 @@ export class AiService {
   private decryptApiKey(key: string): string | undefined {
     const record = safeJson<Record<string, unknown>>(this.indexDb.getConfigRecord(key) ?? '{}');
     const encrypted = typeof record?.encryptedApiKey === 'string' ? record.encryptedApiKey : '';
-    return encrypted ? decrypt(encrypted, this.keyMaterial) : undefined;
+    return encrypted ? decryptSecret(encrypted, this.keyMaterial) : undefined;
   }
 
   private async collectChunks(projectId: string): Promise<Omit<VectorChunkInput, 'embedding'>[]> {
@@ -1125,6 +1214,18 @@ export class AiService {
 
     return chunks;
   }
+}
+
+async function runLimited<T>(items: T[], concurrency: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(concurrency, 1), items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      await worker(items[index], index);
+    }
+  }));
 }
 
 function normalizeModelConfig(record: string | undefined, fallbackProvider: AiConfig['llm']['provider'], fallbackBaseUrl: string, fallbackModel: string): AiConfig['llm'] {
@@ -1187,7 +1288,34 @@ function deriveKey(scope: string): Buffer {
   return scryptSync(`${user}:${hostname()}:${scope}`, createHash('sha256').update(scope).digest('hex'), 32);
 }
 
-function encrypt(plainText: string, key: Buffer): string {
+function encryptSecret(plainText: string, key: Buffer): string {
+  const safeStorage = getSafeStorage();
+  if (safeStorage?.isEncryptionAvailable()) {
+    try {
+      return `${SAFE_STORAGE_PREFIX}${safeStorage.encryptString(plainText).toString('base64')}`;
+    } catch (error) {
+      console.warn('[AiService] safeStorage encryption failed, falling back to AES-GCM', summarizeError(error));
+    }
+  }
+  return `${AES_GCM_PREFIX}${encryptAesGcm(plainText, key)}`;
+}
+
+function decryptSecret(payload: string, key: Buffer): string {
+  if (payload.startsWith(SAFE_STORAGE_PREFIX)) {
+    const safeStorage = getSafeStorage();
+    if (!safeStorage?.isEncryptionAvailable()) {
+      throw new Error('Electron safeStorage is unavailable for this encrypted key');
+    }
+    return safeStorage.decryptString(Buffer.from(payload.slice(SAFE_STORAGE_PREFIX.length), 'base64'));
+  }
+  if (payload.startsWith(AES_GCM_PREFIX)) {
+    return decryptAesGcm(payload.slice(AES_GCM_PREFIX.length), key);
+  }
+  // 兼容历史版本未带前缀的 AES-GCM 密文。
+  return decryptAesGcm(payload, key);
+}
+
+function encryptAesGcm(plainText: string, key: Buffer): string {
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(plainText, 'utf8'), cipher.final()]);
@@ -1195,7 +1323,7 @@ function encrypt(plainText: string, key: Buffer): string {
   return Buffer.concat([iv, tag, encrypted]).toString('base64');
 }
 
-function decrypt(payload: string, key: Buffer): string {
+function decryptAesGcm(payload: string, key: Buffer): string {
   const buffer = Buffer.from(payload, 'base64');
   const iv = buffer.subarray(0, 12);
   const tag = buffer.subarray(12, 28);
@@ -1205,12 +1333,213 @@ function decrypt(payload: string, key: Buffer): string {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
+function getSafeStorage(): SafeStorageLike | undefined {
+  try {
+    const electron = requireOptional('electron') as { safeStorage?: SafeStorageLike };
+    return electron.safeStorage;
+  } catch {
+    return undefined;
+  }
+}
+
 function assertHttpUrl(value: string): string {
   const url = new URL(value);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('Only HTTP/HTTPS URLs are allowed');
   }
   return url.toString().replace(/\/$/, '');
+}
+
+function validateHttpToolTarget(value: string): { ok: true } | { ok: false; reason: string } {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return { ok: false, reason: 'HTTP 工具 URL 无效' };
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { ok: false, reason: 'HTTP 工具仅允许 HTTP/HTTPS URL' };
+  }
+
+  const hostname = stripHostnameBrackets(url.hostname).toLowerCase();
+  const normalizedIp = normalizeIpLiteral(hostname);
+  if (!hostname || isBlockedHostname(hostname)) {
+    return { ok: false, reason: `HTTP 工具目标被阻断: ${hostname || 'empty-host'}` };
+  }
+
+  if (normalizedIp && isBlockedIp(normalizedIp)) {
+    return { ok: false, reason: `HTTP 工具目标被阻断: ${hostname}` };
+  }
+
+  return { ok: true };
+}
+
+function validateHttpToolRedirect(fromUrl: string, toUrl: string): { ok: true } | { ok: false; reason: string } {
+  let from: URL;
+  let to: URL;
+  try {
+    from = new URL(fromUrl);
+    to = new URL(toUrl);
+  } catch {
+    return { ok: false, reason: 'HTTP 工具重定向 URL 无效' };
+  }
+
+  const targetValidation = validateHttpToolTarget(to.toString());
+  if (!targetValidation.ok) return targetValidation;
+
+  if (from.protocol !== to.protocol || from.hostname.toLowerCase() !== to.hostname.toLowerCase() || getEffectivePort(from) !== getEffectivePort(to)) {
+    return { ok: false, reason: `HTTP 工具禁止跨域重定向: ${from.origin} -> ${to.origin}` };
+  }
+  return { ok: true };
+}
+
+function stripHostnameBrackets(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname === 'metadata.google.internal' ||
+    hostname.endsWith('.metadata.google.internal')
+  );
+}
+
+function normalizeIpLiteral(hostname: string): string | undefined {
+  if (isIP(hostname)) return hostname;
+  if (/^0x[0-9a-f]+$/i.test(hostname)) {
+    const value = Number.parseInt(hostname.slice(2), 16);
+    return Number.isFinite(value) ? intToIpv4(value) : undefined;
+  }
+  if (/^\d+$/.test(hostname)) {
+    const value = Number.parseInt(hostname, 10);
+    return Number.isFinite(value) ? intToIpv4(value) : undefined;
+  }
+  const ipv4Parts = hostname.split('.');
+  if (ipv4Parts.length > 1 && ipv4Parts.length < 4 && ipv4Parts.every((part) => /^\d+$/.test(part))) {
+    const parts = ipv4Parts.map((part) => Number.parseInt(part, 10));
+    if (parts.every((part) => Number.isInteger(part) && part >= 0)) {
+      if (parts.length === 2 && parts[0] <= 255 && parts[1] <= 0xffffff) return `${parts[0]}.${(parts[1] >> 16) & 255}.${(parts[1] >> 8) & 255}.${parts[1] & 255}`;
+      if (parts.length === 3 && parts[0] <= 255 && parts[1] <= 255 && parts[2] <= 0xffff) return `${parts[0]}.${parts[1]}.${(parts[2] >> 8) & 255}.${parts[2] & 255}`;
+    }
+  }
+  return undefined;
+}
+
+function intToIpv4(value: number): string | undefined {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) return undefined;
+  return [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.');
+}
+
+function isBlockedIp(ip: string): boolean {
+  const version = isIP(ip);
+  if (version === 4) return isBlockedIpv4(ip);
+  if (version === 6) return isBlockedIpv6(ip);
+  return false;
+}
+
+function isBlockedIpv4(ip: string): boolean {
+  const parts = ip.split('.').map((part) => Number.parseInt(part, 10));
+  const value = ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+  return (
+    inIpv4Range(value, '0.0.0.0', 8) ||
+    inIpv4Range(value, '10.0.0.0', 8) ||
+    inIpv4Range(value, '100.64.0.0', 10) ||
+    inIpv4Range(value, '127.0.0.0', 8) ||
+    inIpv4Range(value, '169.254.0.0', 16) ||
+    inIpv4Range(value, '172.16.0.0', 12) ||
+    inIpv4Range(value, '192.168.0.0', 16)
+  );
+}
+
+function inIpv4Range(value: number, base: string, prefix: number): boolean {
+  const baseParts = base.split('.').map((part) => Number.parseInt(part, 10));
+  const baseValue = ((baseParts[0] << 24) >>> 0) + (baseParts[1] << 16) + (baseParts[2] << 8) + baseParts[3];
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (value & mask) === (baseValue & mask);
+}
+
+function isBlockedIpv6(ip: string): boolean {
+  const expanded = expandIpv6(ip);
+  if (!expanded) return true;
+  const first = Number.parseInt(expanded[0], 16);
+  const isLoopback = expanded.slice(0, 7).every((part) => part === '0000') && expanded[7] === '0001';
+  const isUnspecified = expanded.every((part) => part === '0000');
+  const isUniqueLocal = (first & 0xfe00) === 0xfc00;
+  const isLinkLocal = (first & 0xffc0) === 0xfe80;
+  const ipv4Mapped = expanded.slice(0, 5).every((part) => part === '0000') && expanded[5] === 'ffff';
+  if (ipv4Mapped) {
+    const high = Number.parseInt(expanded[6], 16);
+    const low = Number.parseInt(expanded[7], 16);
+    const mapped = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+    return isBlockedIpv4(mapped);
+  }
+  return isLoopback || isUnspecified || isUniqueLocal || isLinkLocal;
+}
+
+function expandIpv6(ip: string): string[] | undefined {
+  const [head = '', tail = ''] = ip.toLowerCase().split('::');
+  if (ip.split('::').length > 2) return undefined;
+  const headParts = head ? head.split(':') : [];
+  const tailParts = tail ? tail.split(':') : [];
+  const missing = 8 - headParts.length - tailParts.length;
+  if (missing < 0) return undefined;
+  const parts = ip.includes('::') ? [...headParts, ...Array(missing).fill('0'), ...tailParts] : headParts;
+  if (parts.length !== 8) return undefined;
+  return parts.map((part) => part.padStart(4, '0'));
+}
+
+function getEffectivePort(url: URL): string {
+  if (url.port) return url.port;
+  return url.protocol === 'https:' ? '443' : '80';
+}
+
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function isAllowedHttpToolMime(contentType: string): boolean {
+  const mime = contentType.split(';', 1)[0].trim().toLowerCase();
+  return HTTP_TOOL_ALLOWED_MIME_TYPES.includes(mime) || mime.endsWith('+json');
+}
+
+async function readLimitedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const contentLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`HTTP 工具响应超过大小限制: ${contentLength} > ${maxBytes}`);
+  }
+
+  if (!response.body) {
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) {
+      throw new Error(`HTTP 工具响应超过大小限制: > ${maxBytes}`);
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`HTTP 工具响应超过大小限制: ${total} > ${maxBytes}`);
+    }
+    chunks.push(value);
+  }
+  const buffer = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(buffer);
 }
 
 function sanitizeId(value: string): string {

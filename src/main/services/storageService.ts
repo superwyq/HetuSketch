@@ -186,6 +186,10 @@ export class StorageService {
     return this.chapterService.deleteChapter(bookId, chapterId);
   }
 
+  deleteVolume(bookId: string, volumeId: string): Promise<void> {
+    return this.chapterService.deleteVolume(bookId, volumeId);
+  }
+
   async createProject(input: ProjectCreateInput): Promise<ProjectManifest> {
     assertProjectCreateInput(input);
     const project = await this.fileStore.createProject(input);

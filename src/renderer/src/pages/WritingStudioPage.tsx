@@ -1,11 +1,21 @@
 import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Empty, Input, List, Popconfirm, Radio, Select, Space, Spin, Tabs, Tag, message } from 'antd';
+import { Alert, Button, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Tabs, Tag, message } from 'antd';
 import type { GetRef, InputRef } from 'antd';
-import type { AiStreamChunk, AiValidationRequest, RagQueryRequest, ValidationFinding, ValidationResult } from '@shared/storageTypes';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ValidationFinding } from '@shared/storageTypes';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ensureDefaultBook, ensureDefaultVolume, listChapters, removeChapter, type ChapterNode, type ChapterStatus, upsertChapter } from '../iterationStore';
+import { MarkdownPreview } from '../components/MarkdownPreview';
+import {
+  createChapterNode,
+  createVolumeNode,
+  deleteChapterNode,
+  type ChapterNode,
+  type ChapterStatus,
+  updateChapterNode
+} from '../chapterStorage';
 import { useAppStore } from '../store/appStore';
+import { useWritingStudioChapters } from '../hooks/useWritingStudioChapters';
+import { useAiAssistantStreams } from '../hooks/useAiAssistantStreams';
 
 const statusOptions: Array<{ value: ChapterStatus; label: string }> = [
   { value: 'not_started', label: '未开始' },
@@ -19,8 +29,11 @@ export function WritingStudioPage(): React.JSX.Element {
   const location = useLocation();
   const selectedProject = useAppStore((state) => state.selectedProject);
   const refreshSidebar = useAppStore((state) => state.refreshSidebar);
-  const [chapters, setChapters] = useState<ChapterNode[]>([]);
-  const [activeId, setActiveId] = useState<string>();
+  const [volumeForm] = Form.useForm<{ name: string }>();
+  const { chapters, setChapters, activeId, setActiveId, activeChapter, reload } = useWritingStudioChapters({
+    selectedProject,
+    locationSearch: location.search
+  });
   const [mode, setMode] = useState<'edit' | 'preview' | 'split'>('split');
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
@@ -35,36 +48,12 @@ export function WritingStudioPage(): React.JSX.Element {
   const titleInputRef = useRef<InputRef>(null);
   const editorRef = useRef<GetRef<typeof Input.TextArea>>(null);
 
-  const reload = useCallback((): void => {
-    if (!selectedProject) {
-      setChapters([]);
-      setActiveId(undefined);
-      return;
-    }
-    const book = ensureDefaultBook(selectedProject);
-    const next = listChapters(selectedProject.id);
-    const firstChapter = next.find((item) => item.kind === 'chapter');
-    setChapters(next);
-    setActiveId((current) => current ?? firstChapter?.id ?? book.id);
-  }, [selectedProject]);
-
-  useEffect(() => {
-    reload();
-  }, [reload]);
-
   useEffect(() => {
     if (editingTitle) {
       titleInputRef.current?.focus();
       titleInputRef.current?.select();
     }
   }, [editingTitle]);
-
-  useEffect(() => {
-    const chapterId = new URLSearchParams(location.search).get('chapter');
-    if (chapterId && chapters.some((item) => item.id === chapterId)) {
-      setActiveId(chapterId);
-    }
-  }, [chapters, location.search]);
 
   // 监听编辑器选中文本变化，同步到 selectedText 状态
   useEffect(() => {
@@ -82,8 +71,6 @@ export function WritingStudioPage(): React.JSX.Element {
     };
   }, [activeId, mode]);
 
-  const activeChapter = useMemo(() => chapters.find((item) => item.id === activeId), [activeId, chapters]);
-
   const startTitleEdit = (): void => {
     if (!activeChapter) return;
     setTitleDraft(activeChapter.title);
@@ -94,44 +81,75 @@ export function WritingStudioPage(): React.JSX.Element {
     if (!activeChapter || !editingTitle) return;
     const nextTitle = titleDraft.trim() || activeChapter.title;
     if (nextTitle !== activeChapter.title) {
-      const updated = upsertChapter({ ...activeChapter, title: nextTitle });
-      setChapters(listChapters(updated.projectId));
-      setActiveId(updated.id);
+      void updateChapterNode(activeChapter, { title: nextTitle })
+        .then((updated) => {
+          setActiveId(updated.id);
+          refreshSidebar();
+          return reload();
+        })
+        .catch((reason) => message.error(reason instanceof Error ? reason.message : '更新标题失败'));
     }
     setEditingTitle(false);
   };
 
   const createVolumeInline = (): void => {
     if (!selectedProject) return;
-    const name = window.prompt('新建分卷名称', '新建分卷');
-    if (!name?.trim()) return;
-    const book = chapters.find((item) => item.kind === 'book');
-    const created = upsertChapter({ projectId: selectedProject.id, title: name.trim(), kind: 'volume', parentId: book?.id, status: 'drafting' });
-    setChapters(listChapters(selectedProject.id));
-    setActiveId(created.id);
-    refreshSidebar();
-    message.success('分卷已创建');
+    volumeForm.setFieldsValue({ name: '新建分卷' });
+    let modal: ReturnType<typeof Modal.confirm>;
+    modal = Modal.confirm({
+      title: '新建分卷',
+      icon: null,
+      content: (
+        <Form form={volumeForm} layout="vertical">
+          <Form.Item name="name" label="分卷名称" rules={[{ required: true, whitespace: true, message: '请输入分卷名称' }]}>
+            <Input autoFocus maxLength={80} />
+          </Form.Item>
+        </Form>
+      ),
+      okText: '创建',
+      cancelText: '取消',
+      onOk: async () => {
+        const { name } = await volumeForm.validateFields();
+        const created = await createVolumeNode(selectedProject, name.trim());
+        setActiveId(created.id);
+        refreshSidebar();
+        message.success('分卷已创建');
+        await reload();
+        modal.destroy();
+      }
+    });
   };
 
   const createChapterInline = (): void => {
     if (!selectedProject) return;
-    const latestVolume = ensureDefaultVolume(selectedProject);
+    const latestVolume = [...chapters].reverse().find((item) => item.kind === 'volume');
     const allChapters = chapters.filter((item) => item.kind === 'chapter');
     const nextIndex = allChapters.length + 1;
     const title = `第${nextIndex}章`;
-    const created = upsertChapter({ projectId: selectedProject.id, title, kind: 'chapter', parentId: latestVolume.id, status: 'drafting' });
-    setChapters(listChapters(selectedProject.id));
-    setActiveId(created.id);
-    refreshSidebar();
-    message.success(`已创建 ${title}`);
+    void createChapterNode(selectedProject, title, latestVolume?.id)
+      .then((created) => {
+        setActiveId(created.id);
+        refreshSidebar();
+        message.success(`已创建 ${title}`);
+        return reload();
+      })
+      .catch((reason) => message.error(reason instanceof Error ? reason.message : '创建章节失败'));
   };
 
   const updateActive = (changes: Partial<ChapterNode>): void => {
     if (!activeChapter) return;
-    const updated = upsertChapter({ ...activeChapter, ...changes });
-    setChapters(listChapters(updated.projectId));
-    setActiveId(updated.id);
-    if ('title' in changes) refreshSidebar();
+    const optimistic = { ...activeChapter, ...changes };
+    setChapters((current) => current.map((item) => item.id === activeChapter.id ? optimistic : item));
+    void updateChapterNode(activeChapter, changes)
+      .then((updated) => {
+        setActiveId(updated.id);
+        if ('title' in changes) refreshSidebar();
+        return reload();
+      })
+      .catch((reason) => {
+        message.error(reason instanceof Error ? reason.message : '更新章节失败');
+        void reload();
+      });
   };
 
   const runValidation = async (): Promise<void> => {
@@ -208,7 +226,15 @@ export function WritingStudioPage(): React.JSX.Element {
               <Button size="small" icon={<SaveOutlined />} onClick={() => message.success('已自动保存到本地')}>保存</Button>
               <Button size="small" icon={<CheckCircleOutlined />} onClick={() => void runValidation()}>逻辑校验</Button>
               <Button size="small" type={aiPanelOpen ? 'primary' : 'default'} icon={<RobotOutlined />} onClick={() => setAiPanelOpen((open) => !open)}>AI 助手</Button>
-              <Popconfirm title="删除该节点及子节点" onConfirm={() => { removeChapter(activeChapter.id); reload(); refreshSidebar(); }}>
+              <Popconfirm title="删除该节点及子节点" onConfirm={() => {
+                void deleteChapterNode(activeChapter)
+                  .then(() => {
+                    setActiveId(undefined);
+                    refreshSidebar();
+                    return reload();
+                  })
+                  .catch((reason) => message.error(reason instanceof Error ? reason.message : '删除节点失败'));
+              }}>
                 <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
               </Popconfirm>
             </Space>
@@ -225,7 +251,7 @@ export function WritingStudioPage(): React.JSX.Element {
                   placeholder="在这里写作。支持 Markdown 标题、列表、引用、代码块等基础语法。"
                 />
               )}
-              {mode !== 'edit' && <div className="markdown-preview" dangerouslySetInnerHTML={{ __html: renderMarkdown(activeChapter.content) }} />}
+              {mode !== 'edit' && <MarkdownPreview content={activeChapter.content} />}
             </div>
             {aiPanelOpen && (
               <AiAssistantPanel
@@ -255,30 +281,25 @@ function AiAssistantPanel({ projectId, selectedText, onClose }: AiAssistantPanel
   const aiReady = useAppStore.getState().isAiReady();
   const [activeTab, setActiveTab] = useState<'validation' | 'foreshadowing' | 'rag'>('validation');
 
-  // AI 校验 Tab 状态
-  const [validationText, setValidationText] = useState('');
-  const [validationOutput, setValidationOutput] = useState('');
-  const [validationFindings, setValidationFindings] = useState<ValidationFinding[]>([]);
-  const [validationLoading, setValidationLoading] = useState(false);
-
-  // 伏笔提醒 Tab 状态
-  const [foreshadowingText, setForeshadowingText] = useState('');
-  const [foreshadowingOutput, setForeshadowingOutput] = useState('');
-  const [foreshadowingReminders, setForeshadowingReminders] = useState<ValidationFinding[]>([]);
-  const [foreshadowingLoading, setForeshadowingLoading] = useState(false);
-
-  // RAG 问答 Tab 状态
-  const [ragQuery, setRagQuery] = useState('');
-  const [ragOutput, setRagOutput] = useState('');
-  const [ragLoading, setRagLoading] = useState(false);
-
-  // 编辑器选中文本时自动填入校验与伏笔输入框
-  useEffect(() => {
-    if (selectedText) {
-      setValidationText(selectedText);
-      setForeshadowingText(selectedText);
-    }
-  }, [selectedText]);
+  const {
+    validationText,
+    setValidationText,
+    validationOutput,
+    validationFindings,
+    validationLoading,
+    foreshadowingText,
+    setForeshadowingText,
+    foreshadowingOutput,
+    foreshadowingReminders,
+    foreshadowingLoading,
+    ragQuery,
+    setRagQuery,
+    ragOutput,
+    ragLoading,
+    runValidation,
+    runForeshadowing,
+    runRag
+  } = useAiAssistantStreams(projectId, selectedText);
 
   // AI 未配置时展示空状态与前往设置入口
   if (!aiReady) {
@@ -296,103 +317,6 @@ function AiAssistantPanel({ projectId, selectedText, onClose }: AiAssistantPanel
       </aside>
     );
   }
-
-  // 执行 AI 流式校验
-  const runValidation = async (): Promise<void> => {
-    if (!validationText.trim()) {
-      message.warning('请输入待校验文本');
-      return;
-    }
-    setValidationLoading(true);
-    setValidationOutput('');
-    setValidationFindings([]);
-    const request: AiValidationRequest = {
-      projectId,
-      text: validationText,
-      includePlotReminders: true,
-      retrievalMode: 'hybrid',
-      topK: 5
-    };
-    // 流式版本会在主进程自行计算基础校验，这里传入空壳结果占位
-    const basic: ValidationResult = {
-      ok: true,
-      checkedAt: new Date().toISOString(),
-      summary: {
-        checkedCharacters: 0,
-        checkedWorldRules: 0,
-        checkedOpenPlots: 0,
-        warningCount: 0,
-        reminderCount: 0
-      },
-      findings: []
-    };
-    try {
-      await window.hetuSketch.ai.streamValidation(request, basic, (chunk: AiStreamChunk) => {
-        if (chunk.type === 'delta' && chunk.content) {
-          setValidationOutput((prev) => prev + chunk.content);
-        } else if (chunk.type === 'error') {
-          message.error(chunk.error ?? 'AI 校验出错');
-        }
-      });
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : 'AI 校验失败');
-    } finally {
-      setValidationLoading(false);
-    }
-  };
-
-  // 执行伏笔流式分析
-  const runForeshadowing = async (): Promise<void> => {
-    if (!foreshadowingText.trim()) {
-      message.warning('请输入待分析文本');
-      return;
-    }
-    setForeshadowingLoading(true);
-    setForeshadowingOutput('');
-    setForeshadowingReminders([]);
-    try {
-      await window.hetuSketch.ai.streamForeshadowing(projectId, foreshadowingText, (chunk: AiStreamChunk) => {
-        if (chunk.type === 'delta' && chunk.content) {
-          setForeshadowingOutput((prev) => prev + chunk.content);
-        } else if (chunk.type === 'error') {
-          message.error(chunk.error ?? '伏笔分析出错');
-        }
-      });
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '伏笔分析失败');
-    } finally {
-      setForeshadowingLoading(false);
-    }
-  };
-
-  // 执行 RAG 流式问答
-  const runRag = async (): Promise<void> => {
-    if (!ragQuery.trim()) {
-      message.warning('请输入问题');
-      return;
-    }
-    setRagLoading(true);
-    setRagOutput('');
-    const request: RagQueryRequest = {
-      projectId,
-      query: ragQuery,
-      topK: 5,
-      retrievalMode: 'hybrid'
-    };
-    try {
-      await window.hetuSketch.ai.streamRagAnswer(request, (chunk: AiStreamChunk) => {
-        if (chunk.type === 'delta' && chunk.content) {
-          setRagOutput((prev) => prev + chunk.content);
-        } else if (chunk.type === 'error') {
-          message.error(chunk.error ?? 'RAG 问答出错');
-        }
-      });
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : 'RAG 问答失败');
-    } finally {
-      setRagLoading(false);
-    }
-  };
 
   return (
     <aside className="ai-assistant-panel">
@@ -500,14 +424,3 @@ function validationScopeLabel(scope: 'chapter' | 'volume' | 'project'): string {
   return ({ chapter: '当前章节', volume: '当前分卷', project: '当前作品' } as const)[scope];
 }
 
-function renderMarkdown(text: string): string {
-  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return escaped
-    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.*)$/gm, '<h1>$1</h1>')
-    .replace(/^> (.*)$/gm, '<blockquote>$1</blockquote>')
-    .replace(/^- (.*)$/gm, '<li>$1</li>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\n/g, '<br />');
-}

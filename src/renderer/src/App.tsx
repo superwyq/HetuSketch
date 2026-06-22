@@ -25,7 +25,7 @@ import {
   ThunderboltOutlined,
   UserOutlined
 } from '@ant-design/icons';
-import { AutoComplete, Badge, Button, Card, Dropdown, Empty, Input, Select, Space, Switch, Tabs, Tag, Tooltip, Typography, message } from 'antd';
+import { AutoComplete, Badge, Button, Card, Dropdown, Empty, Form, Input, Modal, Select, Space, Switch, Tabs, Tag, Tooltip, Typography, message } from 'antd';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
@@ -41,8 +41,16 @@ const WritingStudioPage = lazy(() => import('./pages/WritingStudioPage').then((m
 function PageFallback(): React.JSX.Element {
   return <div className="page-suspense-fallback" role="status" aria-label="加载中">加载中…</div>;
 }
-import { ensureDefaultBook, listChapters, reorderChapter, type ChapterNode, type ChapterStatus, upsertChapter } from './iterationStore';
+import {
+  listChapterNodesForProject,
+  migrateLegacyChapters,
+  reorderChapterNode,
+  type ChapterNode,
+  type ChapterStatus,
+  updateChapterNode
+} from './chapterStorage';
 import { useAppStore } from './store/appStore';
+import { useWorkbenchLayout, type WorkbenchLayoutState } from './hooks/useWorkbenchLayout';
 
 const ACTIVITY_DEFAULT_ORDER = ['search', 'characters', 'worlds', 'plots', 'editor', 'projects', 'settings'] as const;
 const LAYOUT_STORAGE_KEY = 'hetusketch.workbench.layout.v1';
@@ -56,6 +64,11 @@ type ActivityId = typeof ACTIVITY_DEFAULT_ORDER[number];
 type PanelTabId = 'ai' | 'characters' | 'worlds' | 'plots' | 'output';
 type EditorTabKey = string;
 type EditorGroupId = 'main' | `secondary-${number}`;
+
+interface DraggingEditorTab {
+  groupId: EditorGroupId;
+  key: EditorTabKey;
+}
 
 interface EditorOpenRequest {
   id: number;
@@ -76,19 +89,6 @@ interface SecondaryGroupState {
   tabs: EditorTab[];
   activeKey: string;
   draggingTabKey?: string;
-}
-
-interface WorkbenchLayoutState {
-  primaryWidth: number;
-  secondaryWidth: number;
-  panelHeight: number;
-  primaryVisible: boolean;
-  secondaryVisible: boolean;
-  panelVisible: boolean;
-  editorSplit: 'single' | 'vertical' | 'grid';
-  editorVerticalRatio: number;
-  editorGridRowRatio: number;
-  editorGridColumnRatio: number;
 }
 
 interface ActivityItem {
@@ -143,19 +143,6 @@ interface SashProps {
   className?: string;
 }
 
-const defaultLayout: WorkbenchLayoutState = {
-  primaryWidth: 250,
-  secondaryWidth: 250,
-  panelHeight: 200,
-  primaryVisible: true,
-  secondaryVisible: false,
-  panelVisible: true,
-  editorSplit: 'single',
-  editorVerticalRatio: 0.64,
-  editorGridRowRatio: 0.52,
-  editorGridColumnRatio: 0.5
-};
-
 export function App(): React.JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
@@ -172,7 +159,7 @@ export function App(): React.JSX.Element {
   const loadSystemFonts = useAppStore((state) => state.loadSystemFonts);
   const [projects, setProjects] = useState<ProjectManifest[]>([]);
   const [searchItems, setSearchItems] = useState<SearchResultItem[]>([]);
-  const [layout, setLayout] = useState<WorkbenchLayoutState>(() => readJson(LAYOUT_STORAGE_KEY, defaultLayout));
+  const { layout, updateLayout } = useWorkbenchLayout(LAYOUT_STORAGE_KEY);
   const [activityOrder, setActivityOrder] = useState<string[]>(() => readArray<string>(ACTIVITY_STORAGE_KEY, [...ACTIVITY_DEFAULT_ORDER]).filter((id) => ACTIVITY_DEFAULT_ORDER.includes(id as ActivityId)));
   const [sidebarViewId, setSidebarViewId] = useState<ActivityId>(() => {
     const stored = readJson<ActivityId | undefined>(SIDEBAR_VIEW_STORAGE_KEY, undefined);
@@ -197,15 +184,19 @@ export function App(): React.JSX.Element {
       console.error('[HetuSketch] preload API not available, skipping project list load');
       return;
     }
-    void window.hetuSketch.projects.list().then((next) => {
+    void window.hetuSketch.projects.list().then(async (next) => {
       setProjects(next);
       setSelectedProject(useAppStore.getState().selectedProject ?? next[0]);
+      try {
+        const migration = await migrateLegacyChapters(next);
+        if (migration.migrated) {
+          useAppStore.getState().refreshSidebar();
+        }
+      } catch (err) {
+        console.error('[HetuSketch] Failed to migrate legacy chapters:', err);
+      }
     }).catch((err) => console.error('[HetuSketch] Failed to load projects:', err));
   }, [setSelectedProject]);
-
-  useEffect(() => {
-    writeJson(LAYOUT_STORAGE_KEY, layout);
-  }, [layout]);
 
   useEffect(() => {
     writeJson(ACTIVITY_STORAGE_KEY, activityOrder);
@@ -226,27 +217,6 @@ export function App(): React.JSX.Element {
     }, 220);
     return () => window.clearTimeout(timer);
   }, [searchKeyword]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const ctrl = event.ctrlKey || event.metaKey;
-      if (!ctrl) return;
-      if (event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        setLayout((current) => ({ ...current, primaryVisible: !current.primaryVisible }));
-      }
-      if (event.key.toLowerCase() === 'j') {
-        event.preventDefault();
-        setLayout((current) => ({ ...current, panelVisible: !current.panelVisible }));
-      }
-      if (event.key === '\\') {
-        event.preventDefault();
-        setLayout((current) => ({ ...current, editorSplit: current.editorSplit === 'single' ? 'vertical' : 'single' }));
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
 
   const activityIdFromPath = (pathname: string): ActivityId => {
     if (pathname.startsWith('/workspace/editor')) return 'editor';
@@ -284,10 +254,6 @@ export function App(): React.JSX.Element {
       .map((id, index) => ({ ...base[id], order: index, visible: true }));
   }, [activityOrder]);
 
-  const updateLayout = (changes: Partial<WorkbenchLayoutState>): void => {
-    setLayout((current) => ({ ...current, ...changes }));
-  };
-
   const pinMain = async (): Promise<void> => {
     const result = await window.hetuSketch.desktop.setMainPinned(!mainPinned);
     setMainPinned(result.pinned);
@@ -308,6 +274,7 @@ export function App(): React.JSX.Element {
   }, [currentEditorGroupId]);
 
   const navigateInCurrentTab = useCallback((path: string) => openInCurrentEditorGroup(path, true), [openInCurrentEditorGroup]);
+  const openInNewTab = useCallback((path: string) => openInCurrentEditorGroup(path, false), [openInCurrentEditorGroup]);
 
   if (location.pathname === '/quick-lookup') {
     return (
@@ -374,6 +341,7 @@ export function App(): React.JSX.Element {
         searchKeyword={searchKeyword}
         onSearchChange={setSearchKeyword}
         onNavigate={navigateInCurrentTab}
+        onOpenInNewTab={openInNewTab}
         onToggle={() => updateLayout({ primaryVisible: !layout.primaryVisible })}
       />
 
@@ -594,6 +562,7 @@ function PrimarySidebar({
   searchKeyword,
   onSearchChange,
   onNavigate,
+  onOpenInNewTab,
   onToggle
 }: {
   visible: boolean;
@@ -602,12 +571,14 @@ function PrimarySidebar({
   searchKeyword: string;
   onSearchChange: (value: string) => void;
   onNavigate: (path: string) => void;
+  onOpenInNewTab: (path: string) => void;
   onToggle: () => void;
 }): React.JSX.Element {
   const [chapters, setChapters] = useState<ChapterNode[]>([]);
   const [entries, setEntries] = useState<ProjectEntry[]>([]);
   const [folders, setFolders] = useState<SidebarFolderState>(() => readJson(SIDEBAR_FOLDERS_STORAGE_KEY, {}));
   const [draggingTreeNode, setDraggingTreeNode] = useState<TreeDragState>();
+  const [folderForm] = Form.useForm<{ name: string }>();
   const sidebarRevision = useAppStore((state) => state.sidebarRevision);
   const updateTabNameMap = useAppStore((state) => state.updateTabNameMap);
 
@@ -617,25 +588,32 @@ function PrimarySidebar({
       setEntries([]);
       return;
     }
-    ensureDefaultBook(selectedProject);
-    const nextChapters = listChapters(selectedProject.id);
-    setChapters(nextChapters);
-    if (activeId === 'characters' || activeId === 'worlds') {
-      const type: EntryType = activeId === 'characters' ? 'character' : 'world';
-      void window.hetuSketch.entries.list({ projectId: selectedProject.id, type, limit: 300 })
-        .then((summaries) => Promise.all(summaries.map((item) => window.hetuSketch.entries.get(item.projectId, type, item.id))))
-        .then((nextEntries) => {
-          setEntries(nextEntries);
-          updateTabNameMap(nextChapters, nextEntries);
-        })
-        .catch(() => {
-          setEntries([]);
-          updateTabNameMap(nextChapters, []);
-        });
-    } else {
-      setEntries([]);
-      updateTabNameMap(nextChapters, []);
-    }
+
+    void listChapterNodesForProject(selectedProject)
+      .then((nextChapters) => {
+        setChapters(nextChapters);
+        if (activeId === 'characters' || activeId === 'worlds') {
+          const type: EntryType = activeId === 'characters' ? 'character' : 'world';
+          return window.hetuSketch.entries.list({ projectId: selectedProject.id, type, limit: 300 })
+            .then((summaries) => {
+              const nextEntries = summaries.map((item) => entrySummaryToProjectEntry(item, type));
+              setEntries(nextEntries);
+              updateTabNameMap(nextChapters, nextEntries);
+            })
+            .catch(() => {
+              setEntries([]);
+              updateTabNameMap(nextChapters, []);
+            });
+        }
+        setEntries([]);
+        updateTabNameMap(nextChapters, []);
+        return undefined;
+      })
+      .catch(() => {
+        setChapters([]);
+        setEntries([]);
+        updateTabNameMap([], []);
+      });
   }, [activeId, selectedProject, sidebarRevision, updateTabNameMap]);
 
   useEffect(() => {
@@ -649,10 +627,28 @@ function PrimarySidebar({
   const folderType = activeId === 'characters' ? 'character' : activeId === 'worlds' ? 'world' : undefined;
   const createFolder = (): void => {
     if (!folderType) return;
-    const name = window.prompt('新建文件夹名称', '新建分类');
-    if (!name?.trim()) return;
-    const nextFolder: SidebarFolderNode = { id: `folder-${crypto.randomUUID().slice(0, 8)}`, name: name.trim(), entryIds: [], children: [] };
-    setFolders((current) => ({ ...current, [folderType]: [...(current[folderType] ?? []), nextFolder] }));
+    folderForm.setFieldsValue({ name: '新建分类' });
+    let modal: ReturnType<typeof Modal.confirm>;
+    modal = Modal.confirm({
+      title: '新建文件夹',
+      icon: null,
+      content: (
+        <Form form={folderForm} layout="vertical">
+          <Form.Item name="name" label="文件夹名称" rules={[{ required: true, whitespace: true, message: '请输入文件夹名称' }]}>
+            <Input autoFocus maxLength={40} />
+          </Form.Item>
+        </Form>
+      ),
+      okText: '创建',
+      cancelText: '取消',
+      onOk: async () => {
+        const { name } = await folderForm.validateFields();
+        const trimmedName = name.trim();
+        const nextFolder: SidebarFolderNode = { id: `folder-${crypto.randomUUID().slice(0, 8)}`, name: trimmedName, entryIds: [], children: [] };
+        setFolders((current) => ({ ...current, [folderType]: [...(current[folderType] ?? []), nextFolder] }));
+        modal.destroy();
+      }
+    });
   };
 
   const handleFolderDrop = (folderId: string): void => {
@@ -669,7 +665,12 @@ function PrimarySidebar({
 
   const handleChapterReorder = (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside'): void => {
     if (!selectedProject) return;
-    setChapters(reorderChapter(sourceId, targetId, position));
+    void reorderChapterNode(selectedProject.id, chapters, sourceId, targetId, position)
+      .then((nextChapters) => {
+        setChapters(nextChapters);
+        updateTabNameMap(nextChapters, entries);
+      })
+      .catch((reason) => message.error(reason instanceof Error ? reason.message : '重排章节失败'));
     setDraggingTreeNode(undefined);
   };
 
@@ -683,11 +684,16 @@ function PrimarySidebar({
   const handleNodeRename = (node: TreeNodeItem, newLabel: string): void => {
     if (!selectedProject || !newLabel.trim()) return;
     const label = newLabel.trim();
-    if (node.kind === 'chapter' || node.kind === 'volume') {
+    if (node.kind === 'chapter' || node.kind === 'volume' || node.kind === 'book') {
       const chapter = chapters.find((item) => item.id === node.id);
       if (chapter) {
-        const updated = upsertChapter({ ...chapter, title: label });
-        setChapters(listChapters(updated.projectId));
+        void updateChapterNode(chapter, { title: label })
+          .then(() => listChapterNodesForProject(selectedProject))
+          .then((nextChapters) => {
+            setChapters(nextChapters);
+            updateTabNameMap(nextChapters, entries);
+          })
+          .catch((reason) => message.error(reason instanceof Error ? reason.message : '重命名章节失败'));
       }
     } else if (node.kind === 'entry' && node.entryType) {
       const entry = entries.find((item) => item.id === node.id);
@@ -742,6 +748,7 @@ function PrimarySidebar({
           onNodeRename={handleNodeRename}
           onChapterReorder={handleChapterReorder}
           onNavigate={onNavigate}
+          onOpenInNewTab={onOpenInNewTab}
         />
         {activeId === 'search' && <Button block className="sidebar-search-action" onClick={() => onNavigate(`/search?q=${encodeURIComponent(searchKeyword)}`)}>打开搜索结果</Button>}
       </div>
@@ -761,7 +768,8 @@ function SidebarView({
   onFolderRename,
   onNodeRename,
   onChapterReorder,
-  onNavigate
+  onNavigate,
+  onOpenInNewTab
 }: {
   activeId: ActivityId;
   selectedProject?: ProjectManifest;
@@ -775,6 +783,7 @@ function SidebarView({
   onNodeRename?: (node: TreeNodeItem, newLabel: string) => void;
   onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void;
   onNavigate: (path: string) => void;
+  onOpenInNewTab: (path: string) => void;
 }): React.JSX.Element {
   const location = useLocation();
   const selectedId = useMemo(() => {
@@ -786,19 +795,19 @@ function SidebarView({
   }, [activeId, location.search]);
 
   if (activeId === 'editor') {
-    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
+    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
   }
   if (activeId === 'characters') {
-    return <TreeSection title="CHARACTERS" nodes={entryTreeNodes('character', entries, folders.character ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="CHARACTERS" nodes={entryTreeNodes('character', entries, folders.character ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'worlds') {
-    return <TreeSection title="WORLDBUILDING" nodes={entryTreeNodes('world', entries, folders.world ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="WORLDBUILDING" nodes={entryTreeNodes('world', entries, folders.world ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'plots') {
-    return <TreeSection title="LIMITED DATABASE" nodes={plotTreeNodes()} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="LIMITED DATABASE" nodes={plotTreeNodes()} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'projects') {
-    return <TreeSection title="BOOKS" nodes={[{ id: 'books-local', label: '本地书目', path: '/projects' }, { id: 'books-import', label: '导入导出', path: '/projects' }, { id: 'books-binding', label: '绑定设定集', path: '/projects' }]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="BOOKS" nodes={[{ id: 'books-local', label: '本地书目', path: '/projects' }, { id: 'books-import', label: '导入导出', path: '/projects' }, { id: 'books-binding', label: '绑定设定集', path: '/projects' }]} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'settings') {
     return <TreeSection title="SETTINGS" nodes={[
@@ -812,29 +821,29 @@ function SidebarView({
       { id: 'settings-tools', label: 'HTTP 工具', path: '/settings?section=tools', icon: <ApiOutlined /> },
       { id: 'settings-divider-3', label: '', divider: true },
       { id: 'settings-about', label: '关于', path: '/settings?section=about', icon: <InfoOutlined /> }
-    ]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    ]} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
-  return <TreeSection title="SEARCH" nodes={[{ id: 'search-global', label: '全局搜索', path: '/search' }]} selectedId={selectedId} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+  return <TreeSection title="SEARCH" nodes={[{ id: 'search-global', label: '全局搜索', path: '/search' }]} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
 }
 
-function TreeSection({ title, nodes, selectedId, draggingTreeNode, onNavigate, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { title: string; nodes: TreeNodeItem[]; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+function TreeSection({ title, nodes, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { title: string; nodes: TreeNodeItem[]; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
   return (
     <section className="sidebar-section">
       <div className="sidebar-section-title">{title}</div>
-      <TreeNodeList nodes={nodes} level={0} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />
+      <TreeNodeList nodes={nodes} level={0} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />
     </section>
   );
 }
 
-function TreeNodeList({ nodes, level, selectedId, draggingTreeNode, onNavigate, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { nodes: TreeNodeItem[]; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+function TreeNodeList({ nodes, level, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { nodes: TreeNodeItem[]; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
   return (
     <div className="tree-node-list" role={level === 0 ? 'tree' : 'group'}>
-      {nodes.map((node) => node.divider ? <div key={node.id} className="tree-divider" role="separator" /> : <TreeNode key={node.id} node={node} level={level} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />)}
+      {nodes.map((node) => node.divider ? <div key={node.id} className="tree-divider" role="separator" /> : <TreeNode key={node.id} node={node} level={level} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />)}
     </div>
   );
 }
 
-function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
   const hasChildren = Boolean(node.children?.length);
   const [expanded, setExpanded] = useState(level < 1);
   const [isEditing, setIsEditing] = useState(false);
@@ -866,11 +875,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onTre
 
   const openInNewPage = (): void => {
     if (!node.path) return;
-    if (typeof window !== 'undefined' && window.hetuSketch?.desktop?.openWindow) {
-      void window.hetuSketch.desktop.openWindow(node.path);
-    } else {
-      window.open(node.path, '_blank');
-    }
+    onOpenInNewTab(node.path);
   };
 
   const startEdit = (event: React.MouseEvent): void => {
@@ -963,7 +968,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onTre
           )}
         </button>
       </Dropdown>
-      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
+      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
     </div>
   );
 }
@@ -1033,6 +1038,26 @@ function entryNode(type: 'character' | 'world', entry: ProjectEntry): TreeNodeIt
     entryType: type,
     path: type === 'character' ? `/data/characters?entry=${encodeURIComponent(entry.id)}` : `/data/worlds?entry=${encodeURIComponent(entry.id)}`
   };
+}
+
+function entrySummaryToProjectEntry(item: SearchResultItem, type: 'character' | 'world'): ProjectEntry {
+  const base = {
+    id: item.id,
+    projectId: item.projectId,
+    type,
+    title: item.title,
+    summary: item.excerpt,
+    content: '',
+    tags: [],
+    relations: [],
+    customFields: {},
+    createdAt: item.updatedAt,
+    updatedAt: item.updatedAt,
+    format: 'json' as const
+  };
+  return type === 'character'
+    ? { ...base, type: 'character', role: 'other', personalityTags: [], redLines: [] }
+    : { ...base, type: 'world', category: 'other', rules: [] };
 }
 
 function flattenFolders(folders: SidebarFolderNode[]): SidebarFolderNode[] {
@@ -1124,7 +1149,9 @@ function EditorWorkbench({
     { key: '/dashboard', title: '总览', path: '/dashboard', dirty: false },
     { key: '/workspace/editor', title: '文本编辑器', path: '/workspace/editor', dirty: false }
   ]));
-  const [draggingTabKey, setDraggingTabKey] = useState<string>();
+  const [draggingTab, setDraggingTab] = useState<DraggingEditorTab>();
+  const [tabDropTarget, setTabDropTarget] = useState<DraggingEditorTab>();
+  const suppressedMainPathRef = useRef<string>();
   const newTabSequenceRef = useRef(0);
   const [secondaryGroups, setSecondaryGroups] = useState<SecondaryGroupState[]>(() => readSecondaryGroups());
   const secondaryCount = splitMode === 'grid' ? 2 : splitMode === 'vertical' ? 1 : 0;
@@ -1163,10 +1190,11 @@ function EditorWorkbench({
   }, [tabNameMap]);
 
   useEffect(() => {
-    if (tabs.length === 0) return;
+    if (tabs.length === 0 || currentGroupId !== 'main' || draggingTab) return;
     const previous = previousActivePathRef.current;
     setTabs((current) => {
       if (current.length === 0 || current.some((tab) => tab.key === activePath)) return current;
+      if (suppressedMainPathRef.current === activePath) return current;
       const nextTab = createTabFromPath(activePath);
       if (location.state?.replaceTab && current.some((tab) => tab.key === previous)) {
         return current.map((tab) => tab.key === previous ? nextTab : tab);
@@ -1174,7 +1202,7 @@ function EditorWorkbench({
       return [...current, nextTab];
     });
     previousActivePathRef.current = activePath;
-  }, [activePath, location.state, tabs.length]);
+  }, [activePath, currentGroupId, draggingTab, location.state, tabs.length]);
 
   useEffect(() => {
     writeJson(OPEN_TABS_STORAGE_KEY, tabs);
@@ -1185,17 +1213,25 @@ function EditorWorkbench({
   }, [secondaryGroups]);
 
   useEffect(() => {
-    if (splitMode === 'vertical') ensureSecondaryGroupTab(0);
-    if (splitMode === 'grid') {
-      ensureSecondaryGroupTab(0);
-      ensureSecondaryGroupTab(1);
+    const visibleGroups: EditorGroupId[] = [];
+    if (tabs.length > 0) visibleGroups.push('main');
+    if (secondaryCount >= 1 && secondaryGroups[0]?.tabs.length > 0) visibleGroups.push('secondary-0');
+    if (secondaryCount >= 2 && secondaryGroups[1]?.tabs.length > 0) visibleGroups.push('secondary-1');
+    if (visibleGroups.length > 0 && !visibleGroups.includes(currentGroupId)) {
+      onCurrentGroupChange(visibleGroups[0]);
     }
-  }, [ensureSecondaryGroupTab, splitMode]);
+  }, [currentGroupId, onCurrentGroupChange, secondaryCount, secondaryGroups, tabs.length]);
 
   useEffect(() => {
     if (!openRequest) return;
+    const visibleGroups: EditorGroupId[] = [];
+    if (tabs.length > 0) visibleGroups.push('main');
+    if (secondaryCount >= 1 && secondaryGroups[0]?.tabs.length > 0) visibleGroups.push('secondary-0');
+    if (secondaryCount >= 2 && secondaryGroups[1]?.tabs.length > 0) visibleGroups.push('secondary-1');
+    const targetGroupId = visibleGroups.includes(openRequest.groupId) ? openRequest.groupId : visibleGroups[0] ?? 'main';
     const tab = createTabFromPath(openRequest.path);
-    if (openRequest.groupId === 'main') {
+    if (targetGroupId === 'main') {
+      suppressedMainPathRef.current = undefined;
       setTabs((current) => {
         if (openRequest.replace && current.some((item) => item.key === activePath)) {
           return current.map((item) => item.key === activePath ? tab : item);
@@ -1208,7 +1244,7 @@ function EditorWorkbench({
       onOpenRequestHandled();
       return;
     }
-    const index = Number(openRequest.groupId.replace('secondary-', ''));
+    const index = Number(targetGroupId.replace('secondary-', ''));
     updateSecondaryGroup(index, (group) => {
       if (openRequest.replace && group.tabs.some((item) => item.key === group.activeKey)) {
         return { ...group, tabs: group.tabs.map((item) => item.key === group.activeKey ? tab : item), activeKey: tab.key, draggingTabKey: undefined };
@@ -1216,9 +1252,9 @@ function EditorWorkbench({
       if (group.tabs.some((item) => item.key === tab.key)) return { ...group, activeKey: tab.key, draggingTabKey: undefined };
       return { ...group, tabs: [...group.tabs, tab], activeKey: tab.key, draggingTabKey: undefined };
     });
-    onCurrentGroupChange(openRequest.groupId);
+    onCurrentGroupChange(targetGroupId);
     onOpenRequestHandled();
-  }, [activePath, navigate, onCurrentGroupChange, onOpenRequestHandled, openRequest, updateSecondaryGroup]);
+  }, [activePath, navigate, onCurrentGroupChange, onOpenRequestHandled, openRequest, secondaryCount, secondaryGroups, tabs.length, updateSecondaryGroup]);
 
   const closeTab = (key: EditorTabKey): void => {
     setTabs((current) => {
@@ -1234,21 +1270,50 @@ function EditorWorkbench({
     setTabs((current) => current.map((tab) => tab.key === key ? { ...tab, title, titleSource: 'custom' } : tab));
   };
 
-  const reorderTab = (targetKey: string): void => {
-    if (!draggingTabKey || draggingTabKey === targetKey) return;
-    setTabs((current) => {
-      const dragging = current.find((tab) => tab.key === draggingTabKey);
-      if (!dragging) return current;
-      const next = current.filter((tab) => tab.key !== draggingTabKey);
-      const targetIndex = next.findIndex((tab) => tab.key === targetKey);
-      next.splice(targetIndex, 0, dragging);
-      return next;
-    });
+  const moveDraggingTab = (targetGroupId: EditorGroupId, targetKey?: string): void => {
+    if (!draggingTab) return;
+    if (draggingTab.groupId === targetGroupId && draggingTab.key === targetKey) return;
+
+    const groups: Record<EditorGroupId, EditorTab[]> = {
+      main: [...tabs],
+      'secondary-0': [...(secondaryGroups[0]?.tabs ?? [])],
+      'secondary-1': [...(secondaryGroups[1]?.tabs ?? [])]
+    };
+    const sourceTabs = groups[draggingTab.groupId];
+    const movingTab = sourceTabs.find((tab) => tab.key === draggingTab.key);
+    if (!movingTab) return;
+    if (draggingTab.groupId === 'main' && targetGroupId !== 'main') {
+      suppressedMainPathRef.current = movingTab.path;
+    }
+    if (targetGroupId === 'main') {
+      suppressedMainPathRef.current = undefined;
+    }
+
+    groups[draggingTab.groupId] = sourceTabs.filter((tab) => tab.key !== draggingTab.key);
+    const targetTabs = groups[targetGroupId].filter((tab) => tab.key !== movingTab.key);
+    const insertIndex = targetKey ? targetTabs.findIndex((tab) => tab.key === targetKey) : -1;
+    targetTabs.splice(insertIndex >= 0 ? insertIndex : targetTabs.length, 0, movingTab);
+    groups[targetGroupId] = targetTabs;
+
+    setTabs(groups.main);
+    setSecondaryGroups((current) => current.map((group, index) => {
+      const groupId = `secondary-${index}` as EditorGroupId;
+      const nextTabs = groups[groupId] ?? [];
+      const activeKey = groupId === targetGroupId
+        ? movingTab.key
+        : nextTabs.some((tab) => tab.key === group.activeKey) ? group.activeKey : nextTabs[0]?.key ?? '';
+      return { ...group, tabs: nextTabs, activeKey, draggingTabKey: undefined };
+    }));
+    if (targetGroupId === 'main') navigate(movingTab.path);
+    onCurrentGroupChange(targetGroupId);
+    setDraggingTab(undefined);
+    setTabDropTarget(undefined);
   };
 
   const openPathInGroup = (groupId: EditorGroupId, path: string): void => {
     const tab = createTabFromPath(path);
     if (groupId === 'main') {
+      suppressedMainPathRef.current = undefined;
       setTabs((current) => current.some((item) => item.key === tab.key) ? current : [...current, tab]);
       navigate(tab.path);
       onCurrentGroupChange('main');
@@ -1268,13 +1333,29 @@ function EditorWorkbench({
   };
 
   const toggleSplitMode = (): void => {
-    const nextMode = splitMode === 'single' ? 'vertical' : splitMode === 'vertical' ? 'grid' : 'single';
-    if (nextMode === 'vertical') ensureSecondaryGroupTab(0);
-    if (nextMode === 'grid') {
-      ensureSecondaryGroupTab(0);
-      ensureSecondaryGroupTab(1);
+    if (visibleGroupCount >= 3) {
+      message.info('已达到最大标签组数量');
+      return;
     }
-    onSplitModeChange(nextMode);
+    const hasMainGroup = tabs.length > 0;
+    const hasFirstSecondaryGroup = (secondaryGroups[0]?.tabs.length ?? 0) > 0;
+    const hasSecondSecondaryGroup = (secondaryGroups[1]?.tabs.length ?? 0) > 0;
+    if (!hasMainGroup) {
+      openPathInGroup('main', '/dashboard');
+      onSplitModeChange(hasFirstSecondaryGroup || hasSecondSecondaryGroup ? 'grid' : 'single');
+      return;
+    }
+    if (!hasFirstSecondaryGroup) {
+      ensureSecondaryGroupTab(0);
+      onSplitModeChange(hasSecondSecondaryGroup ? 'grid' : 'vertical');
+      return;
+    }
+    if (!hasSecondSecondaryGroup) {
+      ensureSecondaryGroupTab(1);
+      onSplitModeChange('grid');
+      return;
+    }
+    message.info('已达到最大标签组数量');
   };
 
   const createEditorActions = (groupId: EditorGroupId): ReactNode => (
@@ -1307,17 +1388,23 @@ function EditorWorkbench({
         activeKey={activePath}
         currentGroupId={currentGroupId}
         tabs={tabs}
-        draggingTabKey={draggingTabKey}
+        draggingTabKey={draggingTab?.groupId === 'main' ? draggingTab.key : undefined}
+        isDragTarget={draggingTab !== undefined}
         onFocusGroup={onCurrentGroupChange}
         onNavigate={(path) => {
+          suppressedMainPathRef.current = undefined;
           onCurrentGroupChange('main');
           navigate(path);
         }}
         onCloseTab={closeTab}
         onRenameTab={renameTab}
-        onDragTabStart={setDraggingTabKey}
-        onDragTabEnter={reorderTab}
-        onDragTabEnd={() => setDraggingTabKey(undefined)}
+        onDragTabStart={(key) => setDraggingTab({ groupId: 'main', key })}
+        onDragTabEnter={(key) => setTabDropTarget({ groupId: 'main', key })}
+        onDropTab={() => moveDraggingTab(tabDropTarget?.groupId ?? 'main', tabDropTarget?.key)}
+        onDragTabEnd={() => {
+          setDraggingTab(undefined);
+          setTabDropTarget(undefined);
+        }}
         actions={createEditorActions('main')}
       >
         <Routes>
@@ -1370,6 +1457,14 @@ function EditorWorkbench({
           groupState={secondaryGroups[0]}
           onCurrentGroupChange={onCurrentGroupChange}
           onGroupChange={(updater) => updateSecondaryGroup(0, updater)}
+          draggingTab={draggingTab}
+          onDragTabStart={setDraggingTab}
+          onDragTabMove={(targetGroupId, targetKey) => setTabDropTarget({ groupId: targetGroupId, key: targetKey ?? '' })}
+          onDropTab={(targetGroupId) => moveDraggingTab(tabDropTarget?.groupId ?? targetGroupId, tabDropTarget?.key || undefined)}
+          onDragTabEnd={() => {
+            setDraggingTab(undefined);
+            setTabDropTarget(undefined);
+          }}
           actions={createEditorActions('secondary-0')}
         />
       )}
@@ -1381,6 +1476,14 @@ function EditorWorkbench({
           groupState={secondaryGroups[1]}
           onCurrentGroupChange={onCurrentGroupChange}
           onGroupChange={(updater) => updateSecondaryGroup(1, updater)}
+          draggingTab={draggingTab}
+          onDragTabStart={setDraggingTab}
+          onDragTabMove={(targetGroupId, targetKey) => setTabDropTarget({ groupId: targetGroupId, key: targetKey ?? '' })}
+          onDropTab={(targetGroupId) => moveDraggingTab(tabDropTarget?.groupId ?? targetGroupId, tabDropTarget?.key || undefined)}
+          onDragTabEnd={() => {
+            setDraggingTab(undefined);
+            setTabDropTarget(undefined);
+          }}
           actions={createEditorActions('secondary-1')}
         />
       )}
@@ -1466,14 +1569,19 @@ function readSecondaryGroups(): SecondaryGroupState[] {
   return [first, second];
 }
 
-function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, actions, onCurrentGroupChange, onGroupChange }: {
+function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, actions, draggingTab, onCurrentGroupChange, onGroupChange, onDragTabStart, onDragTabMove, onDropTab, onDragTabEnd }: {
   title: string;
   groupId: EditorGroupId;
   currentGroupId: EditorGroupId;
   groupState: SecondaryGroupState;
   actions?: ReactNode;
+  draggingTab?: DraggingEditorTab;
   onCurrentGroupChange: (groupId: EditorGroupId) => void;
   onGroupChange: (updater: (group: SecondaryGroupState) => SecondaryGroupState) => void;
+  onDragTabStart: (tab?: DraggingEditorTab) => void;
+  onDragTabMove: (targetGroupId: EditorGroupId, targetKey?: string) => void;
+  onDropTab: (targetGroupId: EditorGroupId) => void;
+  onDragTabEnd: () => void;
 }): React.JSX.Element {
   const { tabs, activeKey, draggingTabKey } = groupState;
 
@@ -1503,19 +1611,6 @@ function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, acti
     onGroupChange((group) => ({ ...group, tabs: group.tabs.map((tab) => tab.key === key ? { ...tab, title, titleSource: 'custom' as const } : tab) }));
   };
 
-  const reorderTab = (targetKey: string): void => {
-    onGroupChange((group) => {
-      if (!group.draggingTabKey || group.draggingTabKey === targetKey) return group;
-      const dragging = group.tabs.find((tab) => tab.key === group.draggingTabKey);
-      if (!dragging) return group;
-      const next = group.tabs.filter((tab) => tab.key !== group.draggingTabKey);
-      const targetIndex = next.findIndex((tab) => tab.key === targetKey);
-      if (targetIndex < 0) return group;
-      next.splice(targetIndex, 0, dragging);
-      return { ...group, tabs: next };
-    });
-  };
-
   const openMenu = {
     items: OPENABLE_PAGES.map((page) => ({
       key: page.path,
@@ -1531,7 +1626,8 @@ function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, acti
       activeKey={activeKey}
       currentGroupId={currentGroupId}
       tabs={tabs}
-      draggingTabKey={draggingTabKey}
+      draggingTabKey={draggingTab?.groupId === groupId ? draggingTab.key : draggingTabKey}
+      isDragTarget={draggingTab !== undefined}
       onFocusGroup={onCurrentGroupChange}
       onNavigate={(path) => {
         onCurrentGroupChange(groupId);
@@ -1542,9 +1638,10 @@ function SecondaryEditorGroup({ title, groupId, currentGroupId, groupState, acti
       }}
       onCloseTab={closeTab}
       onRenameTab={renameTab}
-      onDragTabStart={(key) => onGroupChange((group) => ({ ...group, draggingTabKey: key }))}
-      onDragTabEnter={reorderTab}
-      onDragTabEnd={() => onGroupChange((group) => ({ ...group, draggingTabKey: undefined }))}
+      onDragTabStart={(key) => onDragTabStart({ groupId, key })}
+      onDragTabEnter={(key) => onDragTabMove(groupId, key)}
+      onDropTab={() => onDropTab(groupId)}
+      onDragTabEnd={onDragTabEnd}
       actions={(
         <Space size={4}>
           {actions}
@@ -1566,6 +1663,7 @@ function EditorGroup({
   currentGroupId,
   tabs,
   draggingTabKey,
+  isDragTarget,
   actions,
   children,
   onFocusGroup,
@@ -1574,6 +1672,7 @@ function EditorGroup({
   onRenameTab,
   onDragTabStart,
   onDragTabEnter,
+  onDropTab,
   onDragTabEnd
 }: {
   title: string;
@@ -1582,6 +1681,7 @@ function EditorGroup({
   currentGroupId: EditorGroupId;
   tabs: EditorTab[];
   draggingTabKey?: string;
+  isDragTarget?: boolean;
   actions?: ReactNode;
   children: ReactNode;
   onFocusGroup: (groupId: EditorGroupId) => void;
@@ -1590,6 +1690,7 @@ function EditorGroup({
   onRenameTab?: (key: EditorTabKey, title: string) => void;
   onDragTabStart?: (key: string) => void;
   onDragTabEnter?: (key: string) => void;
+  onDropTab?: () => void;
   onDragTabEnd?: () => void;
 }): React.JSX.Element {
   const [renamingTabKey, setRenamingTabKey] = useState<string>();
@@ -1625,10 +1726,19 @@ function EditorGroup({
 
   return (
     <section
-      className={`editor-group ${currentGroupId === groupId ? 'is-current' : ''}`}
+      className={`editor-group ${currentGroupId === groupId ? 'is-current' : ''} ${isDragTarget ? 'is-tab-drop-target' : ''}`}
       aria-label={title}
       onMouseDownCapture={() => onFocusGroup(groupId)}
       onFocus={() => onFocusGroup(groupId)}
+      onDragOver={(event) => {
+        if (!isDragTarget) return;
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!isDragTarget) return;
+        event.preventDefault();
+        onDropTab?.();
+      }}
     >
       <div className="editor-tabbar">
         <div
@@ -1750,6 +1860,7 @@ function SecondarySidebar({ visible, onToggle }: { visible: boolean; onToggle: (
                 { id: 'outline-plot', label: '未回收伏笔' }
               ]}
               onNavigate={() => undefined}
+              onOpenInNewTab={() => undefined}
               onTreeDragStart={() => undefined}
               onFolderDrop={() => undefined}
               onFolderRename={() => undefined}

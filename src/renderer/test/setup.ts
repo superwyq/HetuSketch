@@ -37,6 +37,28 @@ Object.defineProperty(window, 'hetuSketch', {
     dashboard: {
       stats: async () => emptyStats
     },
+    books: {
+      list: async () => [],
+      get: async (bookId: string) => ({ id: bookId, title: '测试书目', type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }),
+      create: async (input: { id?: string; title: string; type?: 'original' | 'fanfiction'; summary?: string; status?: 'planning' | 'drafting' | 'revision' | 'completed' | 'archived' }) => ({ id: input.id ?? 'book-1', title: input.title, type: input.type ?? 'original', summary: input.summary ?? '', status: input.status ?? 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }),
+      update: async (input: { id: string; title?: string; type?: 'original' | 'fanfiction'; summary?: string; status?: 'planning' | 'drafting' | 'revision' | 'completed' | 'archived' }) => ({ id: input.id, title: input.title ?? '测试书目', type: input.type ?? 'original', summary: input.summary ?? '', status: input.status ?? 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }),
+      delete: async () => undefined,
+      bindSettingSet: async (bookId: string, settingSetId?: string) => ({ book: { id: bookId, title: '测试书目', settingSetId, type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }, conflictCount: 0, warnings: [] })
+    },
+    chapters: {
+      listTree: async (bookId: string) => ({
+        book: { id: bookId, title: '测试书目', type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const },
+        volumes: [],
+        chapters: []
+      }),
+      createVolume: async (input: { bookId: string; id?: string; title: string; order?: number; status?: 'planning' | 'drafting' | 'revision' | 'completed' | 'locked' }) => ({ id: input.id ?? 'vol-1', bookId: input.bookId, title: input.title, order: input.order ?? 1, actualWords: 0, status: input.status ?? 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      updateVolume: async (input: { bookId: string; id: string; title?: string; order?: number; status?: 'planning' | 'drafting' | 'revision' | 'completed' | 'locked' }) => ({ id: input.id, bookId: input.bookId, title: input.title ?? '第一卷', order: input.order ?? 1, actualWords: 0, status: input.status ?? 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      createChapter: async (input: { bookId: string; id?: string; volumeId: string; title: string; content?: string; order?: number; status?: 'not_started' | 'drafting' | 'revision' | 'done' | 'locked'; relatedPlotIds?: string[] }) => ({ id: input.id ?? 'ch-1', bookId: input.bookId, volumeId: input.volumeId, title: input.title, content: input.content ?? '', format: 'markdown' as const, order: input.order ?? 1, actualWords: 0, status: input.status ?? 'drafting', relatedCharacterIds: [], relatedWorldEntryIds: [], relatedPlotIds: input.relatedPlotIds ?? [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      updateChapter: async (input: { bookId: string; id: string; volumeId?: string; title?: string; content?: string; order?: number; status?: 'not_started' | 'drafting' | 'revision' | 'done' | 'locked'; relatedPlotIds?: string[] }) => ({ id: input.id, bookId: input.bookId, volumeId: input.volumeId ?? 'vol-1', title: input.title ?? '章节', content: input.content ?? '', format: 'markdown' as const, order: input.order ?? 1, actualWords: 0, status: input.status ?? 'drafting', relatedCharacterIds: [], relatedWorldEntryIds: [], relatedPlotIds: input.relatedPlotIds ?? [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      moveChapter: async (input: { bookId: string }) => ({ book: { id: input.bookId, title: '测试书目', type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }, volumes: [], chapters: [] }),
+      deleteChapter: async () => undefined,
+      deleteVolume: async () => undefined
+    },
     projects: {
       list: async () => [],
       get: async () => { throw new Error('not found'); },

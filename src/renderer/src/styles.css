@@ -402,6 +402,10 @@ button {
   overflow: auto;
 }
 
+.markdown-preview img {
+  max-width: 100%;
+}
+
 .find-input {
   width: 180px;
 }
@@ -1685,6 +1689,15 @@ button {
 .editor-group.is-current {
   border-color: var(--color-ring);
   box-shadow: inset 0 0 0 1px var(--color-ring);
+}
+
+.editor-group.is-tab-drop-target {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 58%, transparent);
+}
+
+.editor-group.is-tab-drop-target .editor-tabbar {
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface));
 }
 
 .editor-tabbar {

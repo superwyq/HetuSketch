@@ -1,5 +1,49 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { IPC_CHANNELS, type HetuSketchApi } from '../shared/ipc.js';
+
+type StreamPayload = object & { requestId?: string };
+type StreamListener<TChunk> = (event: IpcRendererEvent, chunk: TChunk) => void;
+
+interface StreamInvokerOptions<TChunk> {
+  channel: string;
+  onChunk: (chunk: TChunk) => void;
+  send: (requestId: string) => void;
+}
+
+export function createStreamInvoker<TChunk>({ channel, onChunk, send }: StreamInvokerOptions<TChunk>): Promise<void> {
+  const requestId = crypto.randomUUID();
+  const streamChannel = (suffix: 'chunk' | 'end' | 'error'): string => `${channel}:${suffix}:${requestId}`;
+
+  return new Promise<void>((resolve, reject) => {
+    const chunkChannel = streamChannel('chunk');
+    const endChannel = streamChannel('end');
+    const errorChannel = streamChannel('error');
+
+    const chunkListener: StreamListener<TChunk> = (_event, chunk) => onChunk(chunk);
+    const endListener = (): void => {
+      cleanup();
+      resolve();
+    };
+    const errorListener = (_event: IpcRendererEvent, error: string): void => {
+      cleanup();
+      reject(new Error(error));
+    };
+    const cleanup = (): void => {
+      ipcRenderer.removeListener(chunkChannel, chunkListener);
+      ipcRenderer.removeListener(endChannel, endListener);
+      ipcRenderer.removeListener(errorChannel, errorListener);
+    };
+
+    ipcRenderer.on(chunkChannel, chunkListener);
+    ipcRenderer.on(endChannel, endListener);
+    ipcRenderer.on(errorChannel, errorListener);
+    send(requestId);
+  });
+}
+
+function withPreloadRequestId<TRequest extends StreamPayload>(request: TRequest, requestId: string): TRequest {
+  return { ...request, requestId };
+}
 
 const api: HetuSketchApi = {
   app: {
@@ -36,7 +80,8 @@ const api: HetuSketchApi = {
     createChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersCreateChapter, input),
     updateChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersUpdateChapter, input),
     moveChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersMoveChapter, input),
-    deleteChapter: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteChapter, bookId, chapterId)
+    deleteChapter: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteChapter, bookId, chapterId),
+    deleteVolume: (bookId, volumeId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteVolume, bookId, volumeId)
   },
   projects: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.projectsList),
@@ -73,93 +118,30 @@ const api: HetuSketchApi = {
     completeSetting: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiSettingComplete, request),
     foreshadowing: (projectId, text, requestId) => ipcRenderer.invoke(IPC_CHANNELS.aiForeshadowing, projectId, text, requestId),
     listModels: (kind) => ipcRenderer.invoke(IPC_CHANNELS.aiModelsList, kind),
-    streamValidation: (request, _basic, onChunk) => {
-      const requestId = request.requestId ?? crypto.randomUUID();
-      request.requestId = requestId;
-      const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamValidation}:${suffix}:${requestId}`;
-      return new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          ipcRenderer.removeAllListeners(channel('chunk'));
-          ipcRenderer.removeAllListeners(channel('end'));
-          ipcRenderer.removeAllListeners(channel('error'));
-        };
-        ipcRenderer.on(channel('chunk'), (_e, chunk) => onChunk(chunk));
-        ipcRenderer.on(channel('end'), () => {
-          cleanup();
-          resolve();
-        });
-        ipcRenderer.on(channel('error'), (_e, error: string) => {
-          cleanup();
-          reject(new Error(error));
-        });
-        ipcRenderer.send(IPC_CHANNELS.aiStreamValidation, request);
-      });
-    },
-    streamRagAnswer: (request, onChunk) => {
-      const requestId = request.requestId ?? crypto.randomUUID();
-      request.requestId = requestId;
-      const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamRagAnswer}:${suffix}:${requestId}`;
-      return new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          ipcRenderer.removeAllListeners(channel('chunk'));
-          ipcRenderer.removeAllListeners(channel('end'));
-          ipcRenderer.removeAllListeners(channel('error'));
-        };
-        ipcRenderer.on(channel('chunk'), (_e, chunk) => onChunk(chunk));
-        ipcRenderer.on(channel('end'), () => {
-          cleanup();
-          resolve();
-        });
-        ipcRenderer.on(channel('error'), (_e, error: string) => {
-          cleanup();
-          reject(new Error(error));
-        });
-        ipcRenderer.send(IPC_CHANNELS.aiStreamRagAnswer, request);
-      });
-    },
-    streamCompleteSetting: (request, onChunk) => {
-      const requestId = request.requestId ?? crypto.randomUUID();
-      request.requestId = requestId;
-      const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamCompleteSetting}:${suffix}:${requestId}`;
-      return new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          ipcRenderer.removeAllListeners(channel('chunk'));
-          ipcRenderer.removeAllListeners(channel('end'));
-          ipcRenderer.removeAllListeners(channel('error'));
-        };
-        ipcRenderer.on(channel('chunk'), (_e, chunk) => onChunk(chunk));
-        ipcRenderer.on(channel('end'), () => {
-          cleanup();
-          resolve();
-        });
-        ipcRenderer.on(channel('error'), (_e, error: string) => {
-          cleanup();
-          reject(new Error(error));
-        });
-        ipcRenderer.send(IPC_CHANNELS.aiStreamCompleteSetting, request);
-      });
-    },
-    streamForeshadowing: (projectId, text, onChunk, requestId) => {
-      const id = requestId ?? crypto.randomUUID();
-      const channel = (suffix: string) => `${IPC_CHANNELS.aiStreamForeshadowing}:${suffix}:${id}`;
-      return new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          ipcRenderer.removeAllListeners(channel('chunk'));
-          ipcRenderer.removeAllListeners(channel('end'));
-          ipcRenderer.removeAllListeners(channel('error'));
-        };
-        ipcRenderer.on(channel('chunk'), (_e, chunk) => onChunk(chunk));
-        ipcRenderer.on(channel('end'), () => {
-          cleanup();
-          resolve();
-        });
-        ipcRenderer.on(channel('error'), (_e, error: string) => {
-          cleanup();
-          reject(new Error(error));
-        });
-        ipcRenderer.send(IPC_CHANNELS.aiStreamForeshadowing, projectId, text, id);
-      });
-    }
+    streamValidation: (request, _basic, onChunk) =>
+      createStreamInvoker({
+        channel: IPC_CHANNELS.aiStreamValidation,
+        onChunk,
+        send: (requestId) => ipcRenderer.send(IPC_CHANNELS.aiStreamValidation, withPreloadRequestId(request, requestId))
+      }),
+    streamRagAnswer: (request, onChunk) =>
+      createStreamInvoker({
+        channel: IPC_CHANNELS.aiStreamRagAnswer,
+        onChunk,
+        send: (requestId) => ipcRenderer.send(IPC_CHANNELS.aiStreamRagAnswer, withPreloadRequestId(request, requestId))
+      }),
+    streamCompleteSetting: (request, onChunk) =>
+      createStreamInvoker({
+        channel: IPC_CHANNELS.aiStreamCompleteSetting,
+        onChunk,
+        send: (requestId) => ipcRenderer.send(IPC_CHANNELS.aiStreamCompleteSetting, withPreloadRequestId(request, requestId))
+      }),
+    streamForeshadowing: (projectId, text, onChunk) =>
+      createStreamInvoker({
+        channel: IPC_CHANNELS.aiStreamForeshadowing,
+        onChunk,
+        send: (requestId) => ipcRenderer.send(IPC_CHANNELS.aiStreamForeshadowing, projectId, text, requestId)
+      })
   },
   agent: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.agentList),

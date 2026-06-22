@@ -83,6 +83,7 @@ export const IPC_CHANNELS = {
   chaptersUpdateChapter: 'chapters:update-chapter',
   chaptersMoveChapter: 'chapters:move-chapter',
   chaptersDeleteChapter: 'chapters:delete-chapter',
+  chaptersDeleteVolume: 'chapters:delete-volume',
   projectsList: 'projects:list',
   projectsGet: 'projects:get',
   projectsCreate: 'projects:create',
@@ -185,6 +186,7 @@ export interface HetuSketchApi {
     updateChapter: (input: ChapterUpdateInput) => Promise<ChapterNode>;
     moveChapter: (input: ChapterMoveInput) => Promise<BookTree>;
     deleteChapter: (bookId: string, chapterId: string) => Promise<void>;
+    deleteVolume: (bookId: string, volumeId: string) => Promise<void>;
   };
   projects: {
     list: () => Promise<ProjectManifest[]>;

@@ -1,10 +1,11 @@
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import { Alert, Avatar, Button, Card, Drawer, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography, message } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { AiStreamChunk, EntryCreateInput, EntryRelation, EntryType, PlotStatus, ProjectEntry, SettingCompletionRequest, SettingCompletionResult } from '@shared/storageTypes';
 import { RelationshipCanvas } from '../components/RelationshipCanvas';
 import { useAppStore } from '../store/appStore';
+import { useEntriesData } from '../hooks/useEntriesData';
 
 interface EntriesPageProps {
   type: EntryType;
@@ -35,15 +36,10 @@ const plotStatusOptions = [
 ];
 
 export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
-  const [form] = Form.useForm<EntryCreateInput>();
   const location = useLocation();
   const selectedProject = useAppStore((state) => state.selectedProject);
   const sidebarKeyword = useAppStore((state) => state.searchKeyword);
   const refreshSidebar = useAppStore((state) => state.refreshSidebar);
-  const [items, setItems] = useState<ProjectEntry[]>([]);
-  const [activeEntry, setActiveEntry] = useState<ProjectEntry>();
-  const [editingEntry, setEditingEntry] = useState<ProjectEntry>();
-  const [createOpen, setCreateOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'cards' | 'list' | 'graph'>('cards');
   const [characterRoleFilter, setCharacterRoleFilter] = useState('all');
   const [relationTargetId, setRelationTargetId] = useState<string>();
@@ -52,9 +48,6 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const [relationBidirectional, setRelationBidirectional] = useState(true);
   const [worldCategoryFilter, setWorldCategoryFilter] = useState('all');
   const [plotStatusFilter, setPlotStatusFilter] = useState<PlotStatus | 'all'>('all');
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>();
   // AI 设定补全相关状态
   const [completionGoal, setCompletionGoal] = useState<NonNullable<SettingCompletionRequest['completionGoal']>>('fill_empty_fields');
   const [aiStreaming, setAiStreaming] = useState(false);
@@ -63,104 +56,38 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const [aiPreviewOpen, setAiPreviewOpen] = useState(false);
   const [ignoredFields, setIgnoredFields] = useState<Set<string>>(new Set());
   const meta = pageMeta[type];
-  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
-  const roleQuery = query.get('role') ?? 'all';
-  const categoryQuery = query.get('category') ?? 'all';
-  const statusQuery = (query.get('status') as PlotStatus | null) ?? 'all';
-  const entryQuery = query.get('entry');
-
-  const loadItems = useCallback(async (): Promise<void> => {
-    if (!selectedProject) {
-      setItems([]);
-      return;
-    }
-
-    setLoading(true);
-    setError(undefined);
-    try {
-      const summaries = await window.hetuSketch.entries.list({ projectId: selectedProject.id, type, limit: 100 });
-      const entries = await Promise.all(summaries.map((item) => window.hetuSketch.entries.get(item.projectId, type, item.id)));
-      setItems(entries);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '条目加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedProject, type]);
-
-  useEffect(() => {
-    form.resetFields();
-    setActiveEntry(undefined);
-    setEditingEntry(undefined);
-    void loadItems();
-  }, [form, loadItems]);
-
-  const saveEntry = async (values: EntryCreateInput): Promise<void> => {
-    if (!selectedProject) {
-      message.warning('请先选择或创建作品');
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const payload = buildPayload(values, type);
-      if (editingEntry) {
-        const updated = await window.hetuSketch.entries.update({
-          projectId: selectedProject.id,
-          type,
-          entryId: editingEntry.id,
-          changes: payload
-        });
-        setActiveEntry(updated);
-        setEditingEntry(undefined);
-        message.success('设定条目已更新');
-      } else {
-        await window.hetuSketch.entries.create({ ...payload, projectId: selectedProject.id, type });
-        message.success('设定条目已保存');
-      }
-      form.resetFields();
-      setCreateOpen(false);
-      await loadItems();
-      refreshSidebar();
-    } catch (reason) {
-      message.error(reason instanceof Error ? reason.message : '保存失败');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const editEntry = (entry: ProjectEntry): void => {
-    setEditingEntry(entry);
-    setActiveEntry(entry);
-    setCreateOpen(true);
-    form.setFieldsValue(entryToForm(entry) as Partial<EntryCreateInput>);
-  };
-
-  const cancelEdit = (): void => {
-    setEditingEntry(undefined);
-    form.resetFields();
-  };
-
-  const deleteEntry = async (entry: ProjectEntry): Promise<void> => {
-    await window.hetuSketch.entries.delete(entry.projectId, type, entry.id);
-    if (activeEntry?.id === entry.id) {
-      setActiveEntry(undefined);
-    }
-    if (editingEntry?.id === entry.id) {
-      cancelEdit();
-    }
-    message.success('条目已删除');
-    await loadItems();
-    refreshSidebar();
-  };
-
-  const markResolved = async (entry: ProjectEntry): Promise<void> => {
-    if (entry.type !== 'plot') return;
-    const updated = await window.hetuSketch.entries.update({ projectId: entry.projectId, type: 'plot', entryId: entry.id, changes: { status: 'resolved' } });
-    setActiveEntry(updated);
-    message.success('伏笔已标记为已回收');
-    await loadItems();
-  };
+  const {
+    form,
+    items,
+    activeEntry,
+    setActiveEntry,
+    editingEntry,
+    createOpen,
+    setCreateOpen,
+    loading,
+    saving,
+    error,
+    filteredItems,
+    roleQuery,
+    categoryQuery,
+    statusQuery,
+    saveEntry,
+    editEntry,
+    cancelEdit,
+    deleteEntry,
+    markResolved
+  } = useEntriesData({
+    type,
+    selectedProject,
+    sidebarKeyword,
+    locationSearch: location.search,
+    characterRoleFilter,
+    worldCategoryFilter,
+    plotStatusFilter,
+    buildPayload,
+    entryToForm,
+    onChanged: refreshSidebar
+  });
 
   const aiComplete = async (): Promise<void> => {
     if (!selectedProject) {
@@ -216,32 +143,6 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
       setAiStreaming(false);
     }
   };
-
-  useEffect(() => {
-    if (!entryQuery) return;
-    const nextActive = items.find((entry) => entry.id === entryQuery);
-    if (nextActive) setActiveEntry(nextActive);
-  }, [entryQuery, items]);
-
-  const filteredItems = useMemo(() => items.filter((entry) => {
-    const keyword = sidebarKeyword.trim().toLowerCase();
-    if (keyword && !`${entry.title} ${entry.summary ?? ''} ${entry.content} ${entry.tags.join(' ')}`.toLowerCase().includes(keyword)) {
-      return false;
-    }
-    const roleFilter = roleQuery !== 'all' ? roleQuery : characterRoleFilter;
-    const categoryFilter = categoryQuery !== 'all' ? categoryQuery : worldCategoryFilter;
-    const statusFilter = statusQuery !== 'all' ? statusQuery : plotStatusFilter;
-    if (type === 'character' && roleFilter !== 'all') {
-      return entry.type === 'character' && entry.role === roleFilter;
-    }
-    if (type === 'world' && categoryFilter !== 'all') {
-      return entry.type === 'world' && entry.category === categoryFilter;
-    }
-    if (type === 'plot' && statusFilter !== 'all') {
-      return entry.type === 'plot' && entry.status === statusFilter;
-    }
-    return true;
-  }), [categoryQuery, characterRoleFilter, entryQuery, items, plotStatusFilter, roleQuery, sidebarKeyword, statusQuery, type, worldCategoryFilter]);
 
   const addStructuredRelation = (): void => {
     if (!relationTargetId || !relationLabel.trim()) {

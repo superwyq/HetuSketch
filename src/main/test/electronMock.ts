@@ -21,6 +21,17 @@ export const ipcMain = {
   handle: () => undefined
 };
 
+export const contextBridge = {
+  exposeInMainWorld: () => undefined
+};
+
+export const ipcRenderer = {
+  invoke: () => Promise.resolve(undefined),
+  send: () => undefined,
+  on: () => undefined,
+  removeListener: () => undefined
+};
+
 export const shell = {
   openExternal: () => Promise.resolve()
 };
