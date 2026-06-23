@@ -6,7 +6,7 @@ export type EntryFormat = 'json' | 'markdown';
 
 export type PlotStatus = 'open' | 'resolved' | 'abandoned';
 
-export type InspirationBuiltinType = 'character_setting' | 'plot_setting' | 'world_setting';
+export type InspirationBuiltinType = 'uncategorized' | 'character_setting' | 'plot_setting' | 'world_setting';
 
 export interface InspirationTypeDefinition {
   id: string;

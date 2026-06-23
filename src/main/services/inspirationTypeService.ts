@@ -5,6 +5,7 @@ import type { InspirationTypeDefinition } from '../../shared/storageTypes.js';
 import { assertSafeSegment, getInspirationTypesPath, type StoragePaths } from './storagePaths.js';
 
 export const BUILT_IN_INSPIRATION_TYPES: InspirationTypeDefinition[] = [
+  { id: 'uncategorized', name: '待分类', builtIn: true },
   { id: 'character_setting', name: '人物设定', builtIn: true },
   { id: 'plot_setting', name: '剧情设定', builtIn: true },
   { id: 'world_setting', name: '世界观设定', builtIn: true }

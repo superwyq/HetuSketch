@@ -42,6 +42,7 @@ function PageFallback(): React.JSX.Element {
   return <div className="page-suspense-fallback" role="status" aria-label="加载中">加载中…</div>;
 }
 import {
+  deleteChapterNode,
   listChapterNodesForProject,
   migrateLegacyChapters,
   reorderChapterNode,
@@ -578,6 +579,8 @@ function PrimarySidebar({
   const [entries, setEntries] = useState<ProjectEntry[]>([]);
   const [folders, setFolders] = useState<SidebarFolderState>(() => readJson(SIDEBAR_FOLDERS_STORAGE_KEY, {}));
   const [draggingTreeNode, setDraggingTreeNode] = useState<TreeDragState>();
+  const [selectedTextNodeIds, setSelectedTextNodeIds] = useState<string[]>([]);
+  const lastSelectedTextNodeIdRef = useRef<string>();
   const [folderForm] = Form.useForm<{ name: string }>();
   const sidebarRevision = useAppStore((state) => state.sidebarRevision);
   const updateTabNameMap = useAppStore((state) => state.updateTabNameMap);
@@ -624,6 +627,13 @@ function PrimarySidebar({
     writeJson(SIDEBAR_FOLDERS_STORAGE_KEY, folders);
   }, [folders]);
 
+  useEffect(() => {
+    if (activeId !== 'editor') {
+      setSelectedTextNodeIds([]);
+      lastSelectedTextNodeIdRef.current = undefined;
+    }
+  }, [activeId]);
+
   const folderType = activeId === 'characters' ? 'character' : activeId === 'worlds' ? 'world' : undefined;
   const createFolder = (): void => {
     if (!folderType) return;
@@ -669,9 +679,70 @@ function PrimarySidebar({
       .then((nextChapters) => {
         setChapters(nextChapters);
         updateTabNameMap(nextChapters, entries);
+        message.success(position === 'inside' ? '章节所属分卷已更新' : '文本结构已更新');
       })
       .catch((reason) => message.error(reason instanceof Error ? reason.message : '重排章节失败'));
     setDraggingTreeNode(undefined);
+  };
+
+  const selectableTextNodes = useMemo(() => chapters.filter((item) => item.kind === 'volume' || item.kind === 'chapter'), [chapters]);
+
+  const handleTextNodeSelect = (node: TreeNodeItem, event: React.MouseEvent): void => {
+    if (activeId !== 'editor' || (node.kind !== 'volume' && node.kind !== 'chapter')) return;
+    const ids = selectableTextNodes.map((item) => item.id);
+    setSelectedTextNodeIds((current) => {
+      if (event.shiftKey && lastSelectedTextNodeIdRef.current) {
+        const anchorIndex = ids.indexOf(lastSelectedTextNodeIdRef.current);
+        const nodeIndex = ids.indexOf(node.id);
+        if (anchorIndex >= 0 && nodeIndex >= 0) {
+          const [start, end] = anchorIndex < nodeIndex ? [anchorIndex, nodeIndex] : [nodeIndex, anchorIndex];
+          return ids.slice(start, end + 1);
+        }
+      }
+      if (event.ctrlKey || event.metaKey) {
+        return current.includes(node.id) ? current.filter((id) => id !== node.id) : [...current, node.id];
+      }
+      return [node.id];
+    });
+    lastSelectedTextNodeIdRef.current = node.id;
+  };
+
+  const handleTextNodeContextMenu = (node: TreeNodeItem): void => {
+    if (activeId !== 'editor' || (node.kind !== 'volume' && node.kind !== 'chapter')) return;
+    setSelectedTextNodeIds((current) => current.includes(node.id) ? current : [node.id]);
+    lastSelectedTextNodeIdRef.current = node.id;
+  };
+
+  const deleteTextNodes = (nodeIds: string[]): void => {
+    if (!selectedProject) return;
+    const deletable = nodeIds
+      .map((id) => chapters.find((item) => item.id === id))
+      .filter((item): item is ChapterNode => item !== undefined)
+      .filter((item) => item.kind === 'volume' || item.kind === 'chapter');
+    if (deletable.length === 0) return;
+    const volumeIds = new Set(deletable.filter((item) => item.kind === 'volume').map((item) => item.id));
+    const targets = deletable.filter((item) => item.kind === 'volume' || !volumeIds.has(item.parentId ?? item.volumeId ?? ''));
+    const hasVolume = targets.some((item) => item.kind === 'volume');
+    Modal.confirm({
+      rootClassName: 'theme-aware-modal',
+      title: targets.length > 1 ? `确认删除 ${targets.length} 个文本节点？` : `确认删除“${targets[0].title}”？`,
+      content: hasVolume ? '删除分卷时，该分卷下的所有章节也将一并删除' : '删除后无法恢复，请确认是否继续。',
+      okText: '确认',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        try {
+          await Promise.all(targets.map((item) => deleteChapterNode(item)));
+          const nextChapters = await listChapterNodesForProject(selectedProject);
+          setChapters(nextChapters);
+          setSelectedTextNodeIds((current) => current.filter((id) => nextChapters.some((item) => item.id === id)));
+          updateTabNameMap(nextChapters, entries);
+          message.success(targets.length > 1 ? '已批量删除文本节点' : '已删除文本节点');
+        } catch (reason) {
+          message.error(reason instanceof Error ? reason.message : '删除文本节点失败');
+        }
+      }
+    });
   };
 
   const renameFolder = (folderId: string, name: string): void => {
@@ -742,6 +813,10 @@ function PrimarySidebar({
           entries={entries}
           folders={folders}
           draggingTreeNode={draggingTreeNode}
+          selectedTextNodeIds={selectedTextNodeIds}
+          onTextNodeSelect={handleTextNodeSelect}
+          onTextNodeContextMenu={handleTextNodeContextMenu}
+          onDeleteTextNodes={deleteTextNodes}
           onTreeDragStart={setDraggingTreeNode}
           onFolderDrop={handleFolderDrop}
           onFolderRename={renameFolder}
@@ -763,6 +838,10 @@ function SidebarView({
   entries,
   folders,
   draggingTreeNode,
+  selectedTextNodeIds,
+  onTextNodeSelect,
+  onTextNodeContextMenu,
+  onDeleteTextNodes,
   onTreeDragStart,
   onFolderDrop,
   onFolderRename,
@@ -777,6 +856,10 @@ function SidebarView({
   entries: ProjectEntry[];
   folders: SidebarFolderState;
   draggingTreeNode?: TreeDragState;
+  selectedTextNodeIds?: string[];
+  onTextNodeSelect?: (node: TreeNodeItem, event: React.MouseEvent) => void;
+  onTextNodeContextMenu?: (node: TreeNodeItem) => void;
+  onDeleteTextNodes?: (nodeIds: string[]) => void;
   onTreeDragStart: (node?: TreeDragState) => void;
   onFolderDrop: (folderId: string) => void;
   onFolderRename: (folderId: string, name: string) => void;
@@ -795,7 +878,7 @@ function SidebarView({
   }, [activeId, location.search]);
 
   if (activeId === 'editor') {
-    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
+    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
   }
   if (activeId === 'characters') {
     return <TreeSection title="CHARACTERS" nodes={entryTreeNodes('character', entries, folders.character ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
@@ -826,30 +909,47 @@ function SidebarView({
   return <TreeSection title="SEARCH" nodes={[{ id: 'search-global', label: '全局搜索', path: '/search' }]} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
 }
 
-function TreeSection({ title, nodes, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { title: string; nodes: TreeNodeItem[]; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+interface TreeInteractionProps {
+  selectedId?: string;
+  draggingTreeNode?: TreeDragState;
+  selectedTextNodeIds?: string[];
+  onTextNodeSelect?: (node: TreeNodeItem, event: React.MouseEvent) => void;
+  onTextNodeContextMenu?: (node: TreeNodeItem) => void;
+  onDeleteTextNodes?: (nodeIds: string[]) => void;
+  onNavigate: (path: string) => void;
+  onOpenInNewTab: (path: string) => void;
+  onTreeDragStart: (node?: TreeDragState) => void;
+  onFolderDrop: (folderId: string) => void;
+  onFolderRename: (folderId: string, name: string) => void;
+  onNodeRename?: (node: TreeNodeItem, newLabel: string) => void;
+  onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void;
+}
+
+function TreeSection({ title, nodes, ...interactions }: { title: string; nodes: TreeNodeItem[] } & TreeInteractionProps): React.JSX.Element {
   return (
     <section className="sidebar-section">
       <div className="sidebar-section-title">{title}</div>
-      <TreeNodeList nodes={nodes} level={0} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />
+      <TreeNodeList nodes={nodes} level={0} {...interactions} />
     </section>
   );
 }
 
-function TreeNodeList({ nodes, level, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { nodes: TreeNodeItem[]; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+function TreeNodeList({ nodes, level, ...interactions }: { nodes: TreeNodeItem[]; level: number } & TreeInteractionProps): React.JSX.Element {
   return (
     <div className="tree-node-list" role={level === 0 ? 'tree' : 'group'}>
-      {nodes.map((node) => node.divider ? <div key={node.id} className="tree-divider" role="separator" /> : <TreeNode key={node.id} node={node} level={level} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />)}
+      {nodes.map((node) => node.divider ? <div key={node.id} className="tree-divider" role="separator" /> : <TreeNode key={node.id} node={node} level={level} {...interactions} />)}
     </div>
   );
 }
 
-function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number; selectedId?: string; draggingTreeNode?: TreeDragState; onNavigate: (path: string) => void; onOpenInNewTab: (path: string) => void; onTreeDragStart: (node?: TreeDragState) => void; onFolderDrop: (folderId: string) => void; onFolderRename: (folderId: string, name: string) => void; onNodeRename?: (node: TreeNodeItem, newLabel: string) => void; onChapterReorder?: (sourceId: string, targetId: string, position: 'before' | 'after' | 'inside') => void }): React.JSX.Element {
+function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeIds = [], onTextNodeSelect, onTextNodeContextMenu, onDeleteTextNodes, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number } & TreeInteractionProps): React.JSX.Element {
   const hasChildren = Boolean(node.children?.length);
   const [expanded, setExpanded] = useState(level < 1);
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState('');
   const [dropPosition, setDropPosition] = useState<'before' | 'after' | 'inside'>();
-  const isSelected = selectedId === node.id;
+  const isTextNode = node.kind === 'volume' || node.kind === 'chapter';
+  const isSelected = selectedId === node.id || (isTextNode && selectedTextNodeIds.includes(node.id));
   const isReadonly = Boolean(node.readonly);
   const canRename = !isReadonly && onNodeRename !== undefined;
   const draggedId = draggingTreeNode?.nodeId;
@@ -877,6 +977,29 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpe
     if (!node.path) return;
     onOpenInNewTab(node.path);
   };
+
+  const handleClick = (event: React.MouseEvent): void => {
+    if (isTextNode) {
+      onTextNodeSelect?.(node, event);
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+    }
+    onClick();
+  };
+
+  const deleteSelection = (): void => {
+    const ids = isTextNode && selectedTextNodeIds.includes(node.id) ? selectedTextNodeIds : [node.id];
+    onDeleteTextNodes?.(ids);
+  };
+
+  const menuItems = [
+    ...(shouldNavigate && node.path
+      ? [
+          { key: 'open-current', label: '打开', onClick },
+          { key: 'open-new', label: '在新页面打开', onClick: openInNewPage }
+        ]
+      : [{ key: 'open-current', label: '打开', onClick }]),
+    ...(isTextNode && onDeleteTextNodes ? [{ key: 'delete', label: '删除', danger: true, onClick: deleteSelection }] : [])
+  ];
 
   const startEdit = (event: React.MouseEvent): void => {
     if (!canRename) return;
@@ -928,14 +1051,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpe
     >
       <Dropdown
         trigger={['contextMenu']}
-        menu={{
-          items: shouldNavigate && node.path
-            ? [
-                { key: 'open-current', label: '打开', onClick: onClick },
-                { key: 'open-new', label: '在新页面打开', onClick: openInNewPage }
-              ]
-            : [{ key: 'open-current', label: '打开', onClick: onClick }]
-        }}
+        menu={{ items: menuItems }}
       >
         <button
           className={`tree-row tree-row-${node.kind ?? 'item'} ${isSelected ? 'is-selected' : ''} ${isReadonly ? 'is-readonly' : ''}`}
@@ -943,7 +1059,8 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpe
           draggable={node.kind === 'entry' || (node.kind === 'folder' && !node.readonly) || node.kind === 'chapter' || node.kind === 'volume'}
           style={{ '--tree-level': level } as React.CSSProperties}
           title={node.label}
-          onClick={onClick}
+          onClick={handleClick}
+          onContextMenu={() => onTextNodeContextMenu?.(node)}
           onDoubleClick={startEdit}
           onDragStart={() => onTreeDragStart({ nodeId: node.id, nodeKind: node.kind, entryType: node.entryType })}
           onDragEnd={() => onTreeDragStart(undefined)}
@@ -968,7 +1085,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, onNavigate, onOpe
           )}
         </button>
       </Dropdown>
-      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
+      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
     </div>
   );
 }

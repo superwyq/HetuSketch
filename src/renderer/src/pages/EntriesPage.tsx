@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, EditOutlined, EyeOutlined, LeftOutlined, PlusOutlined, RightOutlined, RobotOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, EditOutlined, EyeOutlined, LeftOutlined, PlusOutlined, RightOutlined, RobotOutlined } from '@ant-design/icons';
 import { Alert, Avatar, Button, Card, Drawer, Dropdown, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Switch, Tag, Typography, message } from 'antd';
 import type { GetRef } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,16 +20,19 @@ const pageMeta = {
 } as const;
 
 const defaultInspirationTypes: InspirationTypeDefinition[] = [
+  { id: 'uncategorized', name: '待分类', builtIn: true },
   { id: 'character_setting', name: '人物设定', builtIn: true },
   { id: 'plot_setting', name: '剧情设定', builtIn: true },
   { id: 'world_setting', name: '世界观设定', builtIn: true }
 ];
 
+const UNCATEGORIZED_INSPIRATION_TYPE = 'uncategorized';
+
 type InspirationTypesApi = Window['hetuSketch']['inspirationTypes'];
 
 function getInspirationTypesApi(): InspirationTypesApi | undefined {
   const api = (window.hetuSketch as unknown as { inspirationTypes?: Partial<InspirationTypesApi> }).inspirationTypes;
-  return typeof api?.list === 'function' && typeof api.create === 'function' ? api as InspirationTypesApi : undefined;
+  return typeof api?.list === 'function' && typeof api.create === 'function' && typeof api.delete === 'function' ? api as InspirationTypesApi : undefined;
 }
 
 const worldCategoryOptions = [
@@ -80,7 +83,6 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   const [ignoredFields, setIgnoredFields] = useState<Set<string>>(new Set());
   const meta = pageMeta[type];
   const inspirationTypeOptions = useMemo(() => inspirationTypes.map((item) => ({ value: item.id, label: item.name })), [inspirationTypes]);
-  const inspirationTypeSelectOptions = useMemo(() => [{ value: 'all', label: '全部灵感类型' }, ...inspirationTypeOptions], [inspirationTypeOptions]);
   const inspirationTypeNameById = useMemo(() => Object.fromEntries(inspirationTypes.map((item) => [item.id, item.name])), [inspirationTypes]);
   const {
     form,
@@ -97,6 +99,7 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
     roleQuery,
     categoryQuery,
     statusQuery,
+    loadItems,
     saveEntry,
     editEntry,
     cancelEdit,
@@ -143,6 +146,43 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
   useEffect(() => {
     void loadInspirationTypes().catch(() => setInspirationTypes(defaultInspirationTypes));
   }, [loadInspirationTypes]);
+
+  const deleteInspirationTypeFromFilter = useCallback(async (target: InspirationTypeDefinition): Promise<void> => {
+    if (target.id === UNCATEGORIZED_INSPIRATION_TYPE) {
+      message.warning('待分类类型不可删除');
+      return;
+    }
+    if (!selectedProject) {
+      message.warning('请先选择作品');
+      return;
+    }
+    const api = getInspirationTypesApi();
+    if (!api) {
+      message.error('灵感类型接口未初始化，请重启应用后重试');
+      return;
+    }
+
+    try {
+      await api.delete(selectedProject.id, target.id);
+      setInspirationTypeFilter((current) => current === target.id ? 'all' : current);
+      setActiveEntry((current) => current?.type === 'plot' && current.inspirationType === target.id ? { ...current, inspirationType: UNCATEGORIZED_INSPIRATION_TYPE } : current);
+      setInspirationTypes(await api.list(selectedProject.id));
+      await loadItems();
+      refreshSidebar();
+      message.success('灵感类型已删除，相关灵感已移至待分类');
+    } catch (reason) {
+      message.error(reason instanceof Error ? reason.message : '灵感类型删除失败');
+    }
+  }, [loadItems, refreshSidebar, selectedProject, setActiveEntry]);
+
+  const inspirationTypeSelectOptions = useMemo(() => [
+    { value: 'all', label: '全部灵感类型', title: '全部灵感类型' },
+    ...inspirationTypes.map((item) => ({
+      value: item.id,
+      title: item.name,
+      label: <InspirationTypeFilterOption type={item} onDelete={deleteInspirationTypeFromFilter} />
+    }))
+  ], [deleteInspirationTypeFromFilter, inspirationTypes]);
 
   const createInspirationTypeFromDropdown = useCallback(async (): Promise<void> => {
     const name = newInspirationTypeName.trim();
@@ -437,7 +477,7 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
           {type === 'character' && <Select size="small" value={roleQuery !== 'all' ? roleQuery : characterRoleFilter} onChange={setCharacterRoleFilter} options={[{ value: 'all', label: '全部角色' }, { value: 'protagonist', label: '主角' }, { value: 'supporting', label: '配角' }, { value: 'antagonist', label: '反派' }, { value: 'other', label: '其他' }]} />}
           <Radio.Group size="small" value={viewMode} onChange={(event) => setViewMode(event.target.value)} optionType="button" options={viewModeOptions} />
           {type === 'world' && <Select size="small" value={categoryQuery !== 'all' ? categoryQuery : worldCategoryFilter} options={worldCategoryOptions} onChange={setWorldCategoryFilter} />}
-          {type === 'plot' && <Select size="small" value={inspirationTypeFilter} options={inspirationTypeSelectOptions} onChange={setInspirationTypeFilter} />}
+          {type === 'plot' && <Select size="small" value={inspirationTypeFilter} options={inspirationTypeSelectOptions} optionLabelProp="title" onChange={setInspirationTypeFilter} />}
           {type === 'plot' && <Select size="small" value={statusQuery !== 'all' ? statusQuery : plotStatusFilter} options={plotStatusOptions} onChange={setPlotStatusFilter} />}
           <Button size="small" icon={<DownloadOutlined />} onClick={exportCurrent}>导出</Button>
           <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增{entryTypeLabel(type)}</Button>
@@ -545,6 +585,41 @@ export function EntriesPage({ type }: EntriesPageProps): React.JSX.Element {
         )}
       </Drawer>
     </div>
+  );
+}
+
+function InspirationTypeFilterOption({ type, onDelete }: { type: InspirationTypeDefinition; onDelete: (type: InspirationTypeDefinition) => Promise<void> }): React.JSX.Element {
+  const deletable = !type.builtIn && type.id !== UNCATEGORIZED_INSPIRATION_TYPE;
+
+  return (
+    <span className="inspiration-type-option">
+      <span className="inspiration-type-option-label">{type.name}</span>
+      {deletable && (
+        <Popconfirm
+          title="确定要删除该灵感类型吗？删除后不可恢复"
+          okText="确认删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          onConfirm={() => void onDelete(type)}
+        >
+          <button
+            type="button"
+            className="inspiration-type-delete"
+            aria-label={`删除灵感类型 ${type.name}`}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            <CloseOutlined />
+          </button>
+        </Popconfirm>
+      )}
+    </span>
   );
 }
 

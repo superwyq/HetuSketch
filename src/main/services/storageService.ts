@@ -291,7 +291,17 @@ export class StorageService {
     return this.inspirationTypeService.update(projectId, id, name);
   }
 
-  deleteInspirationType(projectId: string, id: string): Promise<void> {
+  async deleteInspirationType(projectId: string, id: string): Promise<void> {
+    if (['uncategorized', 'character_setting', 'plot_setting', 'world_setting'].includes(id)) {
+      return;
+    }
+
+    const plots = await this.loadEntriesByType<PlotEntry>(projectId, 'plot');
+    for (const plot of plots) {
+      if (plot.inspirationType === id) {
+        await this.saveEntry({ projectId, entry: { ...plot, inspirationType: 'uncategorized', updatedAt: new Date().toISOString() } });
+      }
+    }
     return this.inspirationTypeService.delete(projectId, id);
   }
 

@@ -290,16 +290,60 @@ button {
   margin-top: 6px;
 }
 
+.inspiration-type-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.inspiration-type-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspiration-type-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: #ff4d4f;
+  background: color-mix(in srgb, #ff4d4f 10%, transparent);
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.inspiration-type-delete:hover {
+  color: #fff;
+  background: #ff4d4f;
+}
+
 .ant-modal .ant-modal-content,
-.ant-modal .ant-modal-header {
+.ant-modal .ant-modal-header,
+.theme-aware-modal .ant-modal-content,
+.theme-aware-modal .ant-modal-header,
+.theme-aware-modal .ant-modal-body,
+.theme-aware-modal .ant-modal-confirm-body-wrapper {
   background: var(--color-surface);
   color: var(--color-foreground);
 }
 
 .ant-modal .ant-modal-title,
 .ant-modal .ant-form-item-label > label,
-.ant-modal .ant-form-item-extra {
+.ant-modal .ant-form-item-extra,
+.theme-aware-modal .ant-modal-confirm-title,
+.theme-aware-modal .ant-modal-confirm-content {
   color: var(--color-foreground);
+}
+
+.theme-aware-modal .ant-modal-mask {
+  background: var(--color-surface-overlay);
 }
 
 .ant-modal .ant-form-item-extra {
