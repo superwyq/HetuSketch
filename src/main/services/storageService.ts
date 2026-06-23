@@ -34,6 +34,7 @@ import type {
   HttpToolConfig,
   HttpToolSaveInput,
   IndexSyncSummary,
+  InspirationTypeDefinition,
   ModelInfo,
   PlotEntry,
   ProjectCreateInput,
@@ -67,6 +68,7 @@ import { BookService } from './bookService.js';
 import { ChapterService } from './chapterService.js';
 import { IndexDatabase } from './indexDatabase.js';
 import { IndexService } from './indexService.js';
+import { InspirationTypeService } from './inspirationTypeService.js';
 import { getFileStats, ProjectFileStore } from './projectFileStore.js';
 import { SettingSetService } from './settingSetService.js';
 import {
@@ -86,6 +88,7 @@ export class StorageService {
   private readonly settingSetService: SettingSetService;
   private readonly bookService: BookService;
   private readonly chapterService: ChapterService;
+  private readonly inspirationTypeService: InspirationTypeService;
 
   constructor(baseDataPath?: string, aiOptions?: AiServiceOptions) {
     this.paths = getStoragePaths(baseDataPath);
@@ -96,6 +99,7 @@ export class StorageService {
     this.settingSetService = new SettingSetService(this.paths);
     this.bookService = new BookService(this.paths);
     this.chapterService = new ChapterService(this.bookService, this.paths);
+    this.inspirationTypeService = new InspirationTypeService(this.paths);
   }
 
   async initialize(options: { watch?: boolean } = {}): Promise<IndexSyncSummary> {
@@ -273,6 +277,22 @@ export class StorageService {
   async deleteEntry(projectId: string, type: EntryType, entryId: string): Promise<void> {
     await this.fileStore.deleteEntry(projectId, type, entryId);
     this.indexDb.removeEntry(entryId);
+  }
+
+  listInspirationTypes(projectId: string): Promise<InspirationTypeDefinition[]> {
+    return this.inspirationTypeService.list(projectId);
+  }
+
+  createInspirationType(projectId: string, name: string): Promise<InspirationTypeDefinition> {
+    return this.inspirationTypeService.create(projectId, name);
+  }
+
+  updateInspirationType(projectId: string, id: string, name: string): Promise<InspirationTypeDefinition> {
+    return this.inspirationTypeService.update(projectId, id, name);
+  }
+
+  deleteInspirationType(projectId: string, id: string): Promise<void> {
+    return this.inspirationTypeService.delete(projectId, id);
   }
 
   search(query: SearchQuery): SearchResultItem[] {
@@ -597,6 +617,8 @@ function buildEntry(input: EntryCreateInput): ProjectEntry {
   return {
     ...base,
     type: 'plot',
+    inspirationType: input.inspirationType ?? 'plot_setting',
+    relatedProjectIds: normalizeStringArray(input.relatedProjectIds),
     setupChapter: input.setupChapter,
     expectedPayoffChapter: input.expectedPayoffChapter,
     status: input.status ?? 'open',
@@ -673,5 +695,5 @@ function toExcerpt(text: string, start: number, end: number): { start: number; e
   return { start, end, excerpt: text.slice(excerptStart, excerptEnd) };
 }
 
-const STOP_WORDS = new Set(['这个', '一个', '不能', '不可', '不会', '绝不', '角色', '世界', '规则', '伏笔', '线索', '相关', '描述']);
+const STOP_WORDS = new Set(['这个', '一个', '不能', '不可', '不会', '绝不', '角色', '世界', '规则', '伏笔', '线索', '灵感', '相关', '描述']);
 

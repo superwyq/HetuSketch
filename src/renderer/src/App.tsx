@@ -244,7 +244,7 @@ export function App(): React.JSX.Element {
       search: { id: 'search', icon: <SearchOutlined />, label: '全局搜索', viewId: 'search', path: '/search' },
       characters: { id: 'characters', icon: <TeamOutlined />, label: '角色数据管理', viewId: 'characters', path: '/data/characters' },
       worlds: { id: 'worlds', icon: <GlobalOutlined />, label: '世界观设定管理', viewId: 'worlds', path: '/data/worlds' },
-      plots: { id: 'plots', icon: <BranchesOutlined />, label: '限时数据库管理', viewId: 'plots', badge: 1, path: '/data/plots' },
+      plots: { id: 'plots', icon: <BranchesOutlined />, label: '灵感数据库', viewId: 'plots', badge: 1, path: '/data/plots' },
       editor: { id: 'editor', icon: <EditOutlined />, label: '文本管理', viewId: 'editor', path: '/workspace/editor' },
       projects: { id: 'projects', icon: <FolderOpenOutlined />, label: '书目管理', viewId: 'projects', path: '/projects' },
       settings: { id: 'settings', icon: <SettingOutlined />, label: '系统设置', viewId: 'settings', path: '/settings' }
@@ -463,7 +463,7 @@ function TitleBar({
           onNavigate(`/search?q=${encodeURIComponent(value)}`);
         }}
       >
-        <Input prefix={<SearchOutlined />} onPressEnter={() => onNavigate(`/search?q=${encodeURIComponent(searchKeyword)}`)} placeholder="搜索角色、世界观规则、伏笔线索..." allowClear />
+        <Input prefix={<SearchOutlined />} onPressEnter={() => onNavigate(`/search?q=${encodeURIComponent(searchKeyword)}`)} placeholder="搜索角色、世界观规则、灵感条目..." allowClear />
       </AutoComplete>
       <Space className="titlebar-actions" size={8}>
         <Select
@@ -804,7 +804,7 @@ function SidebarView({
     return <TreeSection title="WORLDBUILDING" nodes={entryTreeNodes('world', entries, folders.world ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'plots') {
-    return <TreeSection title="LIMITED DATABASE" nodes={plotTreeNodes()} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
+    return <TreeSection title="INSPIRATION DATABASE" nodes={plotTreeNodes()} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
   }
   if (activeId === 'projects') {
     return <TreeSection title="BOOKS" nodes={[{ id: 'books-local', label: '本地书目', path: '/projects' }, { id: 'books-import', label: '导入导出', path: '/projects' }, { id: 'books-binding', label: '绑定设定集', path: '/projects' }]} selectedId={selectedId} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
@@ -1107,9 +1107,8 @@ function renameFolderNode(folders: SidebarFolderNode[], folderId: string, name: 
 
 function plotTreeNodes(): TreeNodeItem[] {
   return [
-    { id: 'plot-open', label: '未回收伏笔', path: '/data/plots?status=open' },
-    { id: 'plot-closed', label: '已回收伏笔', path: '/data/plots?status=resolved' },
-    { id: 'plot-conflict', label: '冲突提醒', path: '/data/plots' }
+    { id: 'plot-open', label: '待整理灵感', path: '/data/plots?status=open' },
+    { id: 'plot-closed', label: '已使用灵感', path: '/data/plots?status=resolved' }
   ];
 }
 
@@ -1504,7 +1503,7 @@ function createTabFromPath(path: string): EditorTab {
     '/dashboard': '总览',
     '/data/characters': entryId ? `角色 · ${entryName ?? entryId.slice(0, 8)}` : folderId ? `角色列表 · ${folderId === 'uncategorized' ? '未分类' : folderId.slice(0, 8)}` : '角色数据库',
     '/data/worlds': entryId ? `世界观 · ${entryName ?? entryId.slice(0, 8)}` : folderId ? `世界观列表 · ${folderId === 'uncategorized' ? '未分类' : folderId.slice(0, 8)}` : '世界观设定库',
-    '/data/plots': '限时数据库',
+    '/data/plots': '灵感数据库',
     '/workspace/editor': chapterId ? `章节 · ${chapterName ?? chapterId.slice(0, 8)}` : '文本编辑器',
     '/projects': '书目管理',
     '/search': '搜索结果',
@@ -1517,7 +1516,7 @@ const OPENABLE_PAGES: Array<{ path: string; label: string }> = [
   { path: '/dashboard', label: '总览' },
   { path: '/data/characters', label: '角色数据库' },
   { path: '/data/worlds', label: '世界观设定库' },
-  { path: '/data/plots', label: '限时数据库' },
+  { path: '/data/plots', label: '灵感数据库' },
   { path: '/workspace/editor', label: '文本编辑器' },
   { path: '/projects', label: '书目管理' },
   { path: '/search', label: '搜索结果' },
@@ -1884,7 +1883,7 @@ function BottomPanel({ visible, activeTab, onActiveTabChange, onToggle }: { visi
             { key: 'ai', label: 'AI 提示' },
             { key: 'characters', label: '角色条目' },
             { key: 'worlds', label: '世界观设定' },
-            { key: 'plots', label: '线索条目' },
+            { key: 'plots', label: '灵感条目' },
             { key: 'output', label: '输出' }
           ]}
         />
@@ -2096,7 +2095,7 @@ function sidebarTitle(id: ActivityId): string {
 }
 
 function typeLabel(type: SearchResultItem['type']): string {
-  return ({ project: '作品', character: '角色', world: '世界', plot: '线索' } as const)[type];
+  return ({ project: '作品', character: '角色', world: '世界', plot: '灵感' } as const)[type];
 }
 
 function readJson<T>(key: string, fallback: T): T {

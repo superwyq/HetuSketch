@@ -64,6 +64,7 @@ interface EntryListRow {
   tags: string;
   file_path: string;
   updated_at: string;
+  metadata_json: string;
 }
 
 export class IndexDatabase {
@@ -175,7 +176,7 @@ export class IndexDatabase {
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 500);
     const rows = this.db
       .prepare(
-        `SELECT id, project_id, type, title, summary, tags, file_path, updated_at
+        `SELECT id, project_id, type, title, summary, tags, file_path, updated_at, metadata_json
          FROM entries
          WHERE project_id = @projectId
            AND (@type IS NULL OR type = @type)
@@ -191,7 +192,8 @@ export class IndexDatabase {
       title: row.title,
       excerpt: row.summary || row.tags || row.title,
       filePath: row.file_path,
-      updatedAt: row.updated_at
+      updatedAt: row.updated_at,
+      metadata: safeJsonRecord(row.metadata_json)
     }));
   }
 
@@ -206,8 +208,8 @@ export class IndexDatabase {
 
     this.db
       .prepare(
-        `INSERT INTO entries (id, project_id, type, title, summary, tags, file_path, content_text, created_at, updated_at)
-         VALUES (@id, @projectId, @type, @title, @summary, @tags, @filePath, @contentText, @createdAt, @updatedAt)
+        `INSERT INTO entries (id, project_id, type, title, summary, tags, file_path, content_text, metadata_json, created_at, updated_at)
+         VALUES (@id, @projectId, @type, @title, @summary, @tags, @filePath, @contentText, @metadataJson, @createdAt, @updatedAt)
          ON CONFLICT(id) DO UPDATE SET
            project_id = excluded.project_id,
            type = excluded.type,
@@ -216,6 +218,7 @@ export class IndexDatabase {
            tags = excluded.tags,
            file_path = excluded.file_path,
            content_text = excluded.content_text,
+           metadata_json = excluded.metadata_json,
            updated_at = excluded.updated_at`
       )
       .run({
@@ -227,6 +230,7 @@ export class IndexDatabase {
         tags: entry.tags.join(','),
         filePath,
         contentText: searchable,
+        metadataJson: JSON.stringify(entryMetadata(entry)),
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt
       });
@@ -686,6 +690,7 @@ export class IndexDatabase {
         tags TEXT NOT NULL DEFAULT '',
         file_path TEXT NOT NULL UNIQUE,
         content_text TEXT NOT NULL DEFAULT '',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -776,10 +781,16 @@ export class IndexDatabase {
       );
 
       CREATE INDEX IF NOT EXISTS idx_entries_project_type ON entries(project_id, type);
+      CREATE INDEX IF NOT EXISTS idx_entries_project_updated ON entries(project_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_file_index_project ON file_index(project_id);
       CREATE INDEX IF NOT EXISTS idx_recent_access_project ON recent_access(project_id, accessed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_vector_chunks_project ON vector_chunks(project_id, entry_type);
     `);
+
+    const entryColumns = this.db.prepare('PRAGMA table_info(entries)').all() as Array<{ name: string }>;
+    if (!entryColumns.some((column) => column.name === 'metadata_json')) {
+      this.db.exec("ALTER TABLE entries ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+    }
   }
 
   private upsertRelations(entry: ProjectEntry): void {
@@ -819,6 +830,29 @@ export class IndexDatabase {
          VALUES (@id, @projectId, @type, @title, @summary, @content, @tags, @filePath, @updatedAt)`
       )
       .run(document);
+  }
+}
+
+function entryMetadata(entry: ProjectEntry): Record<string, string> {
+  if (entry.type !== 'plot') {
+    return {};
+  }
+
+  return {
+    inspirationType: entry.inspirationType,
+    relatedProjectIds: entry.relatedProjectIds.join(',')
+  };
+}
+
+function safeJsonRecord(text: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch {
+    return {};
   }
 }
 

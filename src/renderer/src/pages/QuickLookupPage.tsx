@@ -232,5 +232,5 @@ export function QuickLookupPage(): React.JSX.Element {
 }
 
 function typeLabel(type: SearchResultItem['type']): string {
-  return ({ project: '作品', character: '角色', world: '世界', plot: '线索' } as const)[type];
+  return ({ project: '作品', character: '角色', world: '世界', plot: '灵感' } as const)[type];
 }

@@ -28,6 +28,7 @@ import type {
   EntryType,
   EntryUpdateInput,
   HttpToolConfig,
+  InspirationTypeDefinition,
   HttpToolSaveInput,
   IndexSyncSummary,
   ModelInfo,
@@ -97,6 +98,10 @@ export const IPC_CHANNELS = {
   entriesCreate: 'entries:create',
   entriesUpdate: 'entries:update',
   entriesDelete: 'entries:delete',
+  inspirationTypesList: 'inspiration-types:list',
+  inspirationTypesCreate: 'inspiration-types:create',
+  inspirationTypesUpdate: 'inspiration-types:update',
+  inspirationTypesDelete: 'inspiration-types:delete',
   validationBasic: 'validation:basic',
   validationEnhanced: 'validation:enhanced',
   aiConfigGet: 'ai:config:get',
@@ -204,6 +209,12 @@ export interface HetuSketchApi {
     create: (input: EntryCreateInput) => Promise<ProjectEntry>;
     update: (input: EntryUpdateInput) => Promise<ProjectEntry>;
     delete: (projectId: string, type: EntryType, entryId: string) => Promise<void>;
+  };
+  inspirationTypes: {
+    list: (projectId: string) => Promise<InspirationTypeDefinition[]>;
+    create: (projectId: string, name: string) => Promise<InspirationTypeDefinition>;
+    update: (projectId: string, id: string, name: string) => Promise<InspirationTypeDefinition>;
+    delete: (projectId: string, id: string) => Promise<void>;
   };
   validation: {
     basic: (request: ValidationRequest) => Promise<ValidationResult>;

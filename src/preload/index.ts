@@ -100,6 +100,12 @@ const api: HetuSketchApi = {
     update: (input) => ipcRenderer.invoke(IPC_CHANNELS.entriesUpdate, input),
     delete: (projectId, type, entryId) => ipcRenderer.invoke(IPC_CHANNELS.entriesDelete, projectId, type, entryId)
   },
+  inspirationTypes: {
+    list: (projectId) => ipcRenderer.invoke(IPC_CHANNELS.inspirationTypesList, projectId),
+    create: (projectId, name) => ipcRenderer.invoke(IPC_CHANNELS.inspirationTypesCreate, projectId, name),
+    update: (projectId, id, name) => ipcRenderer.invoke(IPC_CHANNELS.inspirationTypesUpdate, projectId, id, name),
+    delete: (projectId, id) => ipcRenderer.invoke(IPC_CHANNELS.inspirationTypesDelete, projectId, id)
+  },
   validation: {
     basic: (request) => ipcRenderer.invoke(IPC_CHANNELS.validationBasic, request),
     enhanced: (request) => ipcRenderer.invoke(IPC_CHANNELS.validationEnhanced, request)

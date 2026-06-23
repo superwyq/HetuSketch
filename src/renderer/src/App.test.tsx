@@ -16,6 +16,6 @@ describe('App shell', () => {
 
     expect(screen.getAllByText('设置').length).toBeGreaterThan(0);
     expect(screen.getAllByText('总览').length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText('搜索角色、世界观规则、伏笔线索...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索角色、世界观规则、灵感条目...')).toBeInTheDocument();
   });
 });

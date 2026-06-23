@@ -228,7 +228,7 @@ export function ChecksPage(): React.JSX.Element {
       <Card title="待校验文本" className="feature-card">
         <Form form={form} layout="vertical">
           <Form.Item name="text" label="正文片段" rules={[{ required: true, message: '请输入待校验文本' }, { min: 10, message: '至少输入 10 个字符' }, { max: 50000, message: '单次校验不超过 50000 字' }]}>
-            <Input.TextArea rows={10} placeholder="粘贴当前章节片段，系统会匹配角色红线、世界规则和伏笔线索" />
+            <Input.TextArea rows={10} placeholder="粘贴当前章节片段，系统会匹配角色红线、世界规则和灵感条目" />
           </Form.Item>
           <Space wrap>
             <Button type="primary" icon={<ExperimentOutlined />} loading={loading} onClick={() => void runBasic()} disabled={!selectedProject}>基础校验</Button>

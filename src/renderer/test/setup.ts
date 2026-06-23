@@ -76,6 +76,16 @@ Object.defineProperty(window, 'hetuSketch', {
       update: async () => { throw new Error('not implemented'); },
       delete: async () => undefined
     },
+    inspirationTypes: {
+      list: async () => [
+        { id: 'character_setting', name: '人物设定', builtIn: true },
+        { id: 'plot_setting', name: '剧情设定', builtIn: true },
+        { id: 'world_setting', name: '世界观设定', builtIn: true }
+      ],
+      create: async (_projectId: string, name: string) => ({ id: 'custom-test', name, builtIn: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      update: async (_projectId: string, id: string, name: string) => ({ id, name, builtIn: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      delete: async () => undefined
+    },
     validation: {
       basic: async () => ({ ok: true, checkedAt: new Date().toISOString(), summary: { checkedCharacters: 0, checkedWorldRules: 0, checkedOpenPlots: 0, warningCount: 0, reminderCount: 0 }, findings: [] }),
       enhanced: async () => ({ requestId: 'test', status: 'degraded', warnings: [], evidence: [], data: undefined })

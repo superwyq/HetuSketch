@@ -14,6 +14,19 @@ export function registerEntriesIpc({ storageService }: IpcRegistrationContext): 
     storageService.deleteEntry(asRequiredString(projectId, 'projectId'), asEntryType(type), asRequiredString(entryId, 'entryId'))
   );
 
+  ipcMain.handle(IPC_CHANNELS.inspirationTypesList, (_event, projectId: unknown) =>
+    storageService.listInspirationTypes(asRequiredString(projectId, 'projectId'))
+  );
+  ipcMain.handle(IPC_CHANNELS.inspirationTypesCreate, (_event, projectId: unknown, name: unknown) =>
+    storageService.createInspirationType(asRequiredString(projectId, 'projectId'), asRequiredString(name, 'name'))
+  );
+  ipcMain.handle(IPC_CHANNELS.inspirationTypesUpdate, (_event, projectId: unknown, id: unknown, name: unknown) =>
+    storageService.updateInspirationType(asRequiredString(projectId, 'projectId'), asRequiredString(id, 'id'), asRequiredString(name, 'name'))
+  );
+  ipcMain.handle(IPC_CHANNELS.inspirationTypesDelete, (_event, projectId: unknown, id: unknown) =>
+    storageService.deleteInspirationType(asRequiredString(projectId, 'projectId'), asRequiredString(id, 'id'))
+  );
+
   ipcMain.handle(IPC_CHANNELS.validationBasic, async (_event, request: unknown) => storageService.validateContent(asValidationRequest(request)));
   ipcMain.handle(IPC_CHANNELS.validationEnhanced, async (_event, request: unknown) => storageService.validateContentEnhanced(asValidationRequest(request)));
 }

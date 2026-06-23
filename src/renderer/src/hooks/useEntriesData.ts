@@ -243,5 +243,12 @@ function summaryToEntry(item: SearchResultItem, type: EntryType): ProjectEntry {
   };
   if (type === 'character') return { ...base, type: 'character', role: 'other', personalityTags: [], redLines: [] };
   if (type === 'world') return { ...base, type: 'world', category: 'other', rules: [] };
-  return { ...base, type: 'plot', status: 'open', relatedCharacters: [] };
+  return {
+    ...base,
+    type: 'plot',
+    inspirationType: item.metadata?.inspirationType ?? 'plot_setting',
+    relatedProjectIds: item.metadata?.relatedProjectIds ? item.metadata.relatedProjectIds.split(',').filter(Boolean) : [],
+    status: 'open',
+    relatedCharacters: []
+  };
 }

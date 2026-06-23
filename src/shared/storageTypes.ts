@@ -6,6 +6,17 @@ export type EntryFormat = 'json' | 'markdown';
 
 export type PlotStatus = 'open' | 'resolved' | 'abandoned';
 
+export type InspirationBuiltinType = 'character_setting' | 'plot_setting' | 'world_setting';
+
+export interface InspirationTypeDefinition {
+  id: string;
+  name: string;
+  builtIn: boolean;
+  projectId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ProjectManifest {
   id: string;
   name: string;
@@ -257,6 +268,8 @@ export interface WorldEntry extends BaseEntry {
 
 export interface PlotEntry extends BaseEntry {
   type: 'plot';
+  inspirationType: InspirationBuiltinType | string;
+  relatedProjectIds: string[];
   setupChapter?: string;
   expectedPayoffChapter?: string;
   status: PlotStatus;
@@ -306,6 +319,8 @@ export interface EntryCreateInput {
   redLines?: string[];
   category?: WorldEntry['category'];
   rules?: string[];
+  inspirationType?: InspirationBuiltinType | string;
+  relatedProjectIds?: string[];
   setupChapter?: string;
   expectedPayoffChapter?: string;
   status?: PlotStatus;
@@ -340,6 +355,7 @@ export interface SearchResultItem {
   score?: number;
   filePath?: string;
   updatedAt: string;
+  metadata?: Record<string, string>;
 }
 
 export interface RecentAccessItem extends SearchResultItem {

@@ -46,6 +46,10 @@ export function getProjectManifestPath(paths: StoragePaths, projectId: string): 
   return join(getProjectRoot(paths, projectId), 'project.json');
 }
 
+export function getInspirationTypesPath(paths: StoragePaths, projectId: string): string {
+  return join(getProjectRoot(paths, projectId), 'inspiration-types.json');
+}
+
 export function getSettingSetRoot(paths: StoragePaths, settingSetId: string): string {
   assertSafeSegment(settingSetId, 'settingSetId');
   return join(paths.settingSetsRoot, settingSetId);

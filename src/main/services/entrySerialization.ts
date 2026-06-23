@@ -70,7 +70,7 @@ export function collectSearchableText(entry: ProjectEntry): string {
   }
 
   if (entry.type === 'plot') {
-    chunks.push(entry.setupChapter, entry.expectedPayoffChapter, entry.status, entry.relatedCharacters.join(' '));
+    chunks.push(entry.inspirationType, entry.relatedProjectIds.join(' '), entry.setupChapter, entry.expectedPayoffChapter, entry.status, entry.relatedCharacters.join(' '));
   }
 
   chunks.push(Object.values(entry.customFields).join(' '));
@@ -116,6 +116,8 @@ function normalizeEntry(entry: ProjectEntry, fallbackFormat: EntryFormat): Proje
 
   return {
     ...normalizedBase,
+    inspirationType: normalizedBase.inspirationType ?? 'plot_setting',
+    relatedProjectIds: Array.isArray(normalizedBase.relatedProjectIds) ? normalizedBase.relatedProjectIds : [],
     status: normalizedBase.status ?? 'open',
     relatedCharacters: Array.isArray(normalizedBase.relatedCharacters) ? normalizedBase.relatedCharacters : []
   };

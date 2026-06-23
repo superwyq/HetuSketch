@@ -1,5 +1,5 @@
-import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Empty, Form, Input, List, Modal, Popconfirm, Radio, Select, Space, Spin, Tabs, Tag, message } from 'antd';
+import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, message } from 'antd';
 import type { GetRef, InputRef } from 'antd';
 import type { ValidationFinding } from '@shared/storageTypes';
 import { useEffect, useRef, useState } from 'react';
@@ -34,7 +34,7 @@ export function WritingStudioPage(): React.JSX.Element {
     selectedProject,
     locationSearch: location.search
   });
-  const [mode, setMode] = useState<'edit' | 'preview' | 'split'>('split');
+  const [mode, setMode] = useState<'edit' | 'preview'>('preview');
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [findIndex, setFindIndex] = useState(-1);
@@ -47,6 +47,7 @@ export function WritingStudioPage(): React.JSX.Element {
   const [selectedText, setSelectedText] = useState('');
   const titleInputRef = useRef<InputRef>(null);
   const editorRef = useRef<GetRef<typeof Input.TextArea>>(null);
+  const editorPositionRef = useRef({ start: 0, end: 0, scrollTop: 0 });
 
   useEffect(() => {
     if (editingTitle) {
@@ -55,21 +56,48 @@ export function WritingStudioPage(): React.JSX.Element {
     }
   }, [editingTitle]);
 
-  // 监听编辑器选中文本变化，同步到 selectedText 状态
+  // 监听编辑器选中文本变化，同步到 selectedText 状态，并记录编辑位置
   useEffect(() => {
     const ta = editorRef.current?.resizableTextArea?.textArea;
     if (!ta) return;
     const updateSelection = (): void => {
-      const { selectionStart: start, selectionEnd: end } = ta;
+      const { selectionStart: start, selectionEnd: end, scrollTop } = ta;
+      editorPositionRef.current = { start, end, scrollTop };
       setSelectedText(start !== end ? ta.value.slice(start, end) : '');
     };
     ta.addEventListener('mouseup', updateSelection);
     ta.addEventListener('keyup', updateSelection);
+    ta.addEventListener('scroll', updateSelection);
     return () => {
       ta.removeEventListener('mouseup', updateSelection);
       ta.removeEventListener('keyup', updateSelection);
+      ta.removeEventListener('scroll', updateSelection);
     };
   }, [activeId, mode]);
+
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    const ta = editorRef.current?.resizableTextArea?.textArea;
+    if (!ta) return;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(editorPositionRef.current.start, editorPositionRef.current.end);
+    ta.scrollTop = editorPositionRef.current.scrollTop;
+  }, [mode]);
+
+  const rememberEditorPosition = (): void => {
+    const ta = editorRef.current?.resizableTextArea?.textArea;
+    if (!ta) return;
+    editorPositionRef.current = {
+      start: ta.selectionStart,
+      end: ta.selectionEnd,
+      scrollTop: ta.scrollTop
+    };
+  };
+
+  const toggleMarkdownMode = (): void => {
+    rememberEditorPosition();
+    setMode((current) => current === 'edit' ? 'preview' : 'edit');
+  };
 
   const startTitleEdit = (): void => {
     if (!activeChapter) return;
@@ -217,7 +245,7 @@ export function WritingStudioPage(): React.JSX.Element {
             <Space wrap className="studio-toolbar-actions" size={4}>
               <Button size="small" icon={<FolderAddOutlined />} onClick={createVolumeInline}>新建分卷</Button>
               <Button size="small" type="primary" icon={<FileAddOutlined />} onClick={createChapterInline}>新建章节</Button>
-              <Radio.Group size="small" value={mode} onChange={(event) => setMode(event.target.value)} options={[{ value: 'edit', label: '编辑' }, { value: 'preview', label: '预览' }, { value: 'split', label: '双栏' }]} optionType="button" />
+              <Button size="small" icon={mode === 'edit' ? <EyeOutlined /> : <EditOutlined />} onClick={toggleMarkdownMode}>{mode === 'edit' ? '预览' : '编辑'}</Button>
               <Input size="small" prefix={<SearchOutlined />} value={findText} onChange={(event) => setFindText(event.target.value)} placeholder="查找" className="find-input" />
               <Input size="small" value={replaceText} onChange={(event) => setReplaceText(event.target.value)} placeholder="替换为" className="find-input" />
               <Button size="small" onClick={replaceCurrent}>替换当前</Button>
@@ -242,16 +270,23 @@ export function WritingStudioPage(): React.JSX.Element {
 
           <div className="studio-body">
             <div className={`studio-editor-area mode-${mode}`}>
-              {mode !== 'preview' && (
+              {mode === 'edit' ? (
                 <Input.TextArea
                   ref={editorRef}
                   className="markdown-editor"
                   value={activeChapter.content}
                   onChange={(event) => updateActive({ content: event.target.value })}
+                  onBlur={rememberEditorPosition}
+                  onSelect={rememberEditorPosition}
+                  onKeyUp={rememberEditorPosition}
+                  onMouseUp={rememberEditorPosition}
                   placeholder="在这里写作。支持 Markdown 标题、列表、引用、代码块等基础语法。"
                 />
+              ) : (
+                <button type="button" className="studio-markdown-preview-button" onClick={toggleMarkdownMode} title="点击切换到编辑模式">
+                  <MarkdownPreview content={activeChapter.content || '暂无正文内容，点击进入编辑模式。'} />
+                </button>
               )}
-              {mode !== 'edit' && <MarkdownPreview content={activeChapter.content} />}
             </div>
             {aiPanelOpen && (
               <AiAssistantPanel
