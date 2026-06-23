@@ -81,7 +81,9 @@ const api: HetuSketchApi = {
     updateChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersUpdateChapter, input),
     moveChapter: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersMoveChapter, input),
     deleteChapter: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteChapter, bookId, chapterId),
-    deleteVolume: (bookId, volumeId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteVolume, bookId, volumeId)
+    deleteVolume: (bookId, volumeId) => ipcRenderer.invoke(IPC_CHANNELS.chaptersDeleteVolume, bookId, volumeId),
+    selectExportFolder: () => ipcRenderer.invoke(IPC_CHANNELS.chaptersSelectExportFolder),
+    export: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersExport, input)
   },
   projects: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.projectsList),

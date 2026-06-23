@@ -4,6 +4,7 @@ import {
   CloseOutlined,
   CloudOutlined,
   CodeOutlined,
+  DownloadOutlined,
   EditOutlined,
   FolderOpenOutlined,
   FontSizeOutlined,
@@ -29,6 +30,7 @@ import { AutoComplete, Badge, Button, Card, Dropdown, Empty, Form, Input, Modal,
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import type { ChapterExportFormat } from '@shared/ipc';
 import type { EntryType, ProjectEntry, ProjectManifest, SearchResultItem } from '@shared/storageTypes';
 // 页面按需加载：将各功能页拆分为独立 chunk，显著缩小主包体积，加快首屏
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
@@ -580,6 +582,10 @@ function PrimarySidebar({
   const [folders, setFolders] = useState<SidebarFolderState>(() => readJson(SIDEBAR_FOLDERS_STORAGE_KEY, {}));
   const [draggingTreeNode, setDraggingTreeNode] = useState<TreeDragState>();
   const [selectedTextNodeIds, setSelectedTextNodeIds] = useState<string[]>([]);
+  const [exportDialog, setExportDialog] = useState<{ open: boolean; nodeIds: string[] }>({ open: false, nodeIds: [] });
+  const [exportFormat, setExportFormat] = useState<ChapterExportFormat>('markdown');
+  const [exportDirectory, setExportDirectory] = useState('');
+  const [exporting, setExporting] = useState(false);
   const lastSelectedTextNodeIdRef = useRef<string>();
   const [folderForm] = Form.useForm<{ name: string }>();
   const sidebarRevision = useAppStore((state) => state.sidebarRevision);
@@ -713,6 +719,62 @@ function PrimarySidebar({
     lastSelectedTextNodeIdRef.current = node.id;
   };
 
+  const textExportChapters = useMemo(() => {
+    const selectedIds = new Set(exportDialog.nodeIds);
+    return selectableTextNodes
+      .filter((item) => item.kind === 'chapter' && selectedIds.has(item.id))
+      .map((item) => ({ title: item.title, content: item.content, order: item.order }));
+  }, [exportDialog.nodeIds, selectableTextNodes]);
+
+  const openExportDialog = (nodeIds: string[]): void => {
+    const selectedIds = new Set(nodeIds);
+    const chapterIds = selectableTextNodes.filter((item) => item.kind === 'chapter' && selectedIds.has(item.id)).map((item) => item.id);
+    if (chapterIds.length === 0) {
+      message.warning('请选择章节进行导出');
+      return;
+    }
+    setExportFormat('markdown');
+    setExportDialog({ open: true, nodeIds: chapterIds });
+  };
+
+  const chooseExportDirectory = (): void => {
+    void window.hetuSketch.chapters.selectExportFolder()
+      .then((directory) => {
+        if (directory) setExportDirectory(directory);
+      })
+      .catch((reason) => {
+        const detail = reason instanceof Error ? reason.message : '未知错误';
+        message.error(`无法打开系统文件浏览器：${detail}`);
+      });
+  };
+
+  const confirmExport = (): void => {
+    if (!exportDirectory) {
+      message.warning('请先选择导出文件夹');
+      return;
+    }
+    if (textExportChapters.length === 0) {
+      message.warning('没有可导出的章节');
+      return;
+    }
+    setExporting(true);
+    const hide = message.loading('正在导出章节…', 0);
+    void window.hetuSketch.chapters.export({
+      format: exportFormat,
+      outputDirectory: exportDirectory,
+      chapters: textExportChapters
+    }).then((result) => {
+      hide();
+      setExporting(false);
+      setExportDialog({ open: false, nodeIds: [] });
+      message.success(`导出完成：${result.destinationPath}`);
+    }).catch((reason) => {
+      hide();
+      setExporting(false);
+      message.error(reason instanceof Error ? reason.message : '导出失败，请检查文件夹权限或磁盘空间');
+    });
+  };
+
   const deleteTextNodes = (nodeIds: string[]): void => {
     if (!selectedProject) return;
     const deletable = nodeIds
@@ -816,6 +878,7 @@ function PrimarySidebar({
           selectedTextNodeIds={selectedTextNodeIds}
           onTextNodeSelect={handleTextNodeSelect}
           onTextNodeContextMenu={handleTextNodeContextMenu}
+          onExportTextNodes={openExportDialog}
           onDeleteTextNodes={deleteTextNodes}
           onTreeDragStart={setDraggingTreeNode}
           onFolderDrop={handleFolderDrop}
@@ -827,6 +890,40 @@ function PrimarySidebar({
         />
         {activeId === 'search' && <Button block className="sidebar-search-action" onClick={() => onNavigate(`/search?q=${encodeURIComponent(searchKeyword)}`)}>打开搜索结果</Button>}
       </div>
+      <Modal
+        className="theme-aware-modal chapter-export-modal"
+        rootClassName="theme-aware-modal chapter-export-modal-root"
+        title="导出章节"
+        open={exportDialog.open}
+        onOk={confirmExport}
+        okText="确认导出"
+        cancelText="取消"
+        confirmLoading={exporting}
+        onCancel={() => setExportDialog({ open: false, nodeIds: [] })}
+      >
+        <div className="chapter-export-panel">
+          <div className="chapter-export-summary">将导出 {textExportChapters.length} 个章节</div>
+          <div className="chapter-export-field">
+            <span className="chapter-export-label">导出格式</span>
+            <Select<ChapterExportFormat>
+              value={exportFormat}
+              onChange={setExportFormat}
+              options={[
+                { value: 'markdown', label: 'Markdown（合并为单个 .md 文件）' },
+                { value: 'txt', label: 'TXT（合并为单个 .txt 文件）' },
+                { value: 'zip', label: 'ZIP（分别导出章节并压缩）', disabled: textExportChapters.length <= 1 }
+              ]}
+            />
+          </div>
+          <div className="chapter-export-field">
+            <span className="chapter-export-label">导出路径</span>
+            <Space.Compact className="chapter-export-path">
+              <Input value={exportDirectory} placeholder="请选择导出文件夹" readOnly />
+              <Button onClick={chooseExportDirectory}>选择文件夹</Button>
+            </Space.Compact>
+          </div>
+        </div>
+      </Modal>
     </aside>
   );
 }
@@ -841,6 +938,7 @@ function SidebarView({
   selectedTextNodeIds,
   onTextNodeSelect,
   onTextNodeContextMenu,
+  onExportTextNodes,
   onDeleteTextNodes,
   onTreeDragStart,
   onFolderDrop,
@@ -859,6 +957,7 @@ function SidebarView({
   selectedTextNodeIds?: string[];
   onTextNodeSelect?: (node: TreeNodeItem, event: React.MouseEvent) => void;
   onTextNodeContextMenu?: (node: TreeNodeItem) => void;
+  onExportTextNodes?: (nodeIds: string[]) => void;
   onDeleteTextNodes?: (nodeIds: string[]) => void;
   onTreeDragStart: (node?: TreeDragState) => void;
   onFolderDrop: (folderId: string) => void;
@@ -878,7 +977,7 @@ function SidebarView({
   }, [activeId, location.search]);
 
   if (activeId === 'editor') {
-    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
+    return <TreeSection title="TEXT STRUCTURE" nodes={chapterTreeNodes(selectedProject, chapters)} selectedId={selectedId} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onExportTextNodes={onExportTextNodes} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} />;
   }
   if (activeId === 'characters') {
     return <TreeSection title="CHARACTERS" nodes={entryTreeNodes('character', entries, folders.character ?? [], selectedProject)} selectedId={selectedId} draggingTreeNode={draggingTreeNode} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} />;
@@ -915,6 +1014,7 @@ interface TreeInteractionProps {
   selectedTextNodeIds?: string[];
   onTextNodeSelect?: (node: TreeNodeItem, event: React.MouseEvent) => void;
   onTextNodeContextMenu?: (node: TreeNodeItem) => void;
+  onExportTextNodes?: (nodeIds: string[]) => void;
   onDeleteTextNodes?: (nodeIds: string[]) => void;
   onNavigate: (path: string) => void;
   onOpenInNewTab: (path: string) => void;
@@ -942,7 +1042,7 @@ function TreeNodeList({ nodes, level, ...interactions }: { nodes: TreeNodeItem[]
   );
 }
 
-function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeIds = [], onTextNodeSelect, onTextNodeContextMenu, onDeleteTextNodes, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number } & TreeInteractionProps): React.JSX.Element {
+function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeIds = [], onTextNodeSelect, onTextNodeContextMenu, onExportTextNodes, onDeleteTextNodes, onNavigate, onOpenInNewTab, onTreeDragStart, onFolderDrop, onFolderRename, onNodeRename, onChapterReorder }: { node: TreeNodeItem; level: number } & TreeInteractionProps): React.JSX.Element {
   const hasChildren = Boolean(node.children?.length);
   const [expanded, setExpanded] = useState(level < 1);
   const [isEditing, setIsEditing] = useState(false);
@@ -986,9 +1086,14 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeI
     onClick();
   };
 
+  const selectedActionIds = (): string[] => (isTextNode && selectedTextNodeIds.includes(node.id) ? selectedTextNodeIds : [node.id]);
+
+  const exportSelection = (): void => {
+    onExportTextNodes?.(selectedActionIds());
+  };
+
   const deleteSelection = (): void => {
-    const ids = isTextNode && selectedTextNodeIds.includes(node.id) ? selectedTextNodeIds : [node.id];
-    onDeleteTextNodes?.(ids);
+    onDeleteTextNodes?.(selectedActionIds());
   };
 
   const menuItems = [
@@ -998,6 +1103,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeI
           { key: 'open-new', label: '在新页面打开', onClick: openInNewPage }
         ]
       : [{ key: 'open-current', label: '打开', onClick }]),
+    ...(node.kind === 'chapter' && onExportTextNodes ? [{ key: 'export', icon: <DownloadOutlined />, label: '导出', onClick: exportSelection }] : []),
     ...(isTextNode && onDeleteTextNodes ? [{ key: 'delete', label: '删除', danger: true, onClick: deleteSelection }] : [])
   ];
 
@@ -1085,7 +1191,7 @@ function TreeNode({ node, level, selectedId, draggingTreeNode, selectedTextNodeI
           )}
         </button>
       </Dropdown>
-      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
+      {(hasChildren || node.kind === 'folder') && expanded ? <TreeNodeList nodes={node.children ?? []} level={level + 1} selectedId={selectedId} draggingTreeNode={draggingTreeNode} selectedTextNodeIds={selectedTextNodeIds} onTextNodeSelect={onTextNodeSelect} onTextNodeContextMenu={onTextNodeContextMenu} onExportTextNodes={onExportTextNodes} onDeleteTextNodes={onDeleteTextNodes} onNavigate={onNavigate} onOpenInNewTab={onOpenInNewTab} onTreeDragStart={onTreeDragStart} onFolderDrop={onFolderDrop} onFolderRename={onFolderRename} onNodeRename={onNodeRename} onChapterReorder={onChapterReorder} /> : null}
     </div>
   );
 }

@@ -346,8 +346,40 @@ button {
   background: var(--color-surface-overlay);
 }
 
+.chapter-export-modal-root .ant-modal-mask {
+  background: color-mix(in srgb, var(--color-surface-overlay) 62%, transparent);
+  backdrop-filter: blur(2px);
+}
+
 .ant-modal .ant-form-item-extra {
   opacity: 0.72;
+}
+
+.chapter-export-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.chapter-export-summary {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-foreground-secondary);
+}
+
+.chapter-export-field {
+  display: grid;
+  gap: 8px;
+}
+
+.chapter-export-label {
+  color: var(--color-foreground);
+  font-weight: 700;
+}
+
+.chapter-export-path {
+  width: 100%;
 }
 
 .setting-set-hero {

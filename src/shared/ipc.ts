@@ -85,6 +85,8 @@ export const IPC_CHANNELS = {
   chaptersMoveChapter: 'chapters:move-chapter',
   chaptersDeleteChapter: 'chapters:delete-chapter',
   chaptersDeleteVolume: 'chapters:delete-volume',
+  chaptersSelectExportFolder: 'chapters:select-export-folder',
+  chaptersExport: 'chapters:export',
   projectsList: 'projects:list',
   projectsGet: 'projects:get',
   projectsCreate: 'projects:create',
@@ -155,6 +157,25 @@ export interface AppInfo {
 
 export type SearchPreviewItem = SearchResultItem;
 
+export type ChapterExportFormat = 'markdown' | 'txt' | 'zip';
+
+export interface ChapterExportItem {
+  title: string;
+  content: string;
+  order: number;
+}
+
+export interface ChapterExportInput {
+  format: ChapterExportFormat;
+  outputDirectory: string;
+  chapters: ChapterExportItem[];
+}
+
+export interface ChapterExportResult {
+  destinationPath: string;
+  fileCount: number;
+}
+
 export interface HetuSketchApi {
   app: {
     getInfo: () => Promise<AppInfo>;
@@ -192,6 +213,8 @@ export interface HetuSketchApi {
     moveChapter: (input: ChapterMoveInput) => Promise<BookTree>;
     deleteChapter: (bookId: string, chapterId: string) => Promise<void>;
     deleteVolume: (bookId: string, volumeId: string) => Promise<void>;
+    selectExportFolder: () => Promise<string | undefined>;
+    export: (input: ChapterExportInput) => Promise<ChapterExportResult>;
   };
   projects: {
     list: () => Promise<ProjectManifest[]>;
