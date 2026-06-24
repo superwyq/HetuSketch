@@ -78,6 +78,22 @@ export function getChapterFilePath(paths: StoragePaths, bookId: string, chapterI
   return join(getBookRoot(paths, bookId), 'chapters', `${chapterId}.md`);
 }
 
+export function getPlotboardFilePath(paths: StoragePaths, bookId: string, chapterId: string): string {
+  assertSafeSegment(chapterId, 'chapterId');
+  return join(getBookRoot(paths, bookId), 'plotboards', `${chapterId}.plotboard.json`);
+}
+
+export function getStateSnapshotFilePath(paths: StoragePaths, bookId: string, chapterId: string): string {
+  assertSafeSegment(chapterId, 'chapterId');
+  return join(getBookRoot(paths, bookId), 'states', `${chapterId}.state-snapshot.json`);
+}
+
+export function getChapterBodySnapshotPath(paths: StoragePaths, bookId: string, chapterId: string, snapshotId: string): string {
+  assertSafeSegment(chapterId, 'chapterId');
+  assertSafeSegment(snapshotId, 'snapshotId');
+  return join(getBookRoot(paths, bookId), 'chapters', 'snapshots', chapterId, `${snapshotId}.md`);
+}
+
 export function getEntryDirectory(paths: StoragePaths, projectId: string, type: EntryType): string {
   return join(getProjectRoot(paths, projectId), ENTRY_DIR_BY_TYPE[type]);
 }

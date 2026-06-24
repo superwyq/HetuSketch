@@ -45,6 +45,21 @@ Object.defineProperty(window, 'hetuSketch', {
       delete: async () => undefined,
       bindSettingSet: async (bookId: string, settingSetId?: string) => ({ book: { id: bookId, title: '测试书目', settingSetId, type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const }, conflictCount: 0, warnings: [] })
     },
+    plotboards: {
+      create: async (input: { bookId: string; chapterId: string; projectId?: string; settingSetId?: string }) => ({ schemaVersion: 1 as const, plotboardId: 'plotboard-1', bookId: input.bookId, chapterId: input.chapterId, projectId: input.projectId, settingSetId: input.settingSetId, cards: [], links: [], viewport: { x: 0, y: 0, zoom: 1 }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      open: async (bookId: string, chapterId: string) => ({ schemaVersion: 1 as const, plotboardId: 'plotboard-1', bookId, chapterId, cards: [], links: [], viewport: { x: 0, y: 0, zoom: 1 }, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }),
+      save: async (plotboard: unknown) => plotboard,
+      saveSnapshot: async (_bookId: string, snapshot: unknown) => snapshot,
+      loadSnapshot: async (_bookId: string, chapterId: string) => ({ schemaVersion: 1 as const, chapterId, states: [], sourceDiffIds: [] }),
+      syncIndex: async () => ({ scannedFiles: 0, indexedEntries: 0, indexedProjects: 0, removedFiles: 0, errors: [] }),
+      exportOutline: async () => '# 剧情画布大纲\n',
+      saveChapterSnapshot: async () => ({ snapshotId: 'snapshot-1', filePath: 'snapshot.md', createdAt: new Date().toISOString() }),
+      writeGeneratedMarkdown: async (input: { bookId: string; chapterId: string; markdown: string }) => ({ chapter: { id: input.chapterId, bookId: input.bookId, volumeId: 'vol-1', title: '章节', content: input.markdown, format: 'markdown' as const, order: 1, actualWords: 0, status: 'drafting' as const, relatedCharacterIds: [], relatedWorldEntryIds: [], relatedPlotIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }),
+      buildAiContext: async () => ({ plotboard: { plotboardId: 'plotboard-1', bookId: 'book-1', chapterId: 'ch-1' }, mode: 'full_chapter' as const, cards: [], links: [], characters: [], worldRules: [], plotClues: [], stateTemplates: [], chapterSnapshot: { schemaVersion: 1 as const, chapterId: 'ch-1', states: [], sourceDiffIds: [] }, sceneDeltas: [], neighborSummaries: [], generationSettings: { mode: 'full_chapter' as const } }),
+      generate: async () => ({ requestId: 'request-1', status: 'degraded' as const, markdown: '## 章节正文\n', stateDiffs: [], context: { plotboard: { plotboardId: 'plotboard-1', bookId: 'book-1', chapterId: 'ch-1' }, mode: 'full_chapter' as const, cards: [], links: [], characters: [], worldRules: [], plotClues: [], stateTemplates: [], chapterSnapshot: { schemaVersion: 1 as const, chapterId: 'ch-1', states: [], sourceDiffIds: [] }, sceneDeltas: [], neighborSummaries: [], generationSettings: { mode: 'full_chapter' as const } }, warnings: ['LLM 未配置'] }),
+      streamGenerate: async (_request: unknown, onChunk?: (chunk: unknown) => void) => { onChunk?.({ type: 'delta', content: '## 章节正文\n' }); return { requestId: 'request-1', status: 'degraded' as const, markdown: '## 章节正文\n', stateDiffs: [], context: { plotboard: { plotboardId: 'plotboard-1', bookId: 'book-1', chapterId: 'ch-1' }, mode: 'full_chapter' as const, cards: [], links: [], characters: [], worldRules: [], plotClues: [], stateTemplates: [], chapterSnapshot: { schemaVersion: 1 as const, chapterId: 'ch-1', states: [], sourceDiffIds: [] }, sceneDeltas: [], neighborSummaries: [], generationSettings: { mode: 'full_chapter' as const } }, warnings: [] }; },
+      settleDiffs: async (_input: unknown) => ({ snapshot: { schemaVersion: 1 as const, chapterId: 'ch-1', states: [], sourceDiffIds: [] }, appliedDiffIds: [], rejectedDiffIds: [] })
+    },
     chapters: {
       listTree: async (bookId: string) => ({
         book: { id: bookId, title: '测试书目', type: 'original', summary: '', status: 'drafting', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), schemaVersion: 2 as const },

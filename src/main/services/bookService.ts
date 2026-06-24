@@ -78,6 +78,8 @@ export class BookService {
     const root = getBookRoot(this.paths, manifest.id);
     await mkdir(join(root, 'volumes'), { recursive: true });
     await mkdir(join(root, 'chapters'), { recursive: true });
+    await mkdir(join(root, 'plotboards'), { recursive: true });
+    await mkdir(join(root, 'states'), { recursive: true });
     await mkdir(join(root, 'characters'), { recursive: true });
     await mkdir(join(root, 'worlds'), { recursive: true });
     await mkdir(join(root, 'assets'), { recursive: true });

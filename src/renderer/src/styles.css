@@ -1530,6 +1530,619 @@ button {
   }
 }
 
+.plotboard-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin: -12px;
+  overflow: hidden;
+  background: var(--color-background);
+  color: var(--color-foreground);
+}
+
+.plotboard-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  color: var(--color-foreground-secondary);
+}
+
+.plotboard-toolbar,
+.plotboard-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.plotboard-toolbar {
+  flex: 0 0 auto;
+  min-height: 42px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plotboard-toolbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plotboard-toolbar-title strong {
+  color: var(--color-primary);
+  letter-spacing: 0.06em;
+}
+
+.plotboard-toolbar-title span {
+  max-width: 280px;
+  overflow: hidden;
+  color: var(--color-foreground-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plotboard-shell {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 320px;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--color-border);
+}
+
+.plotboard-materials,
+.plotboard-properties {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px;
+  background: var(--color-surface);
+}
+
+.plotboard-materials {
+  border-right: 1px solid var(--color-border);
+}
+
+.plotboard-properties {
+  gap: 10px;
+  border-left: 1px solid var(--color-border);
+  overflow-y: auto;
+}
+
+.plotboard-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.plotboard-panel-header strong {
+  color: var(--color-foreground);
+}
+
+.plotboard-panel-header .ant-typography {
+  font-size: var(--font-size-body-xs);
+}
+
+.plotboard-materials .ant-tabs-nav {
+  margin-bottom: 8px;
+}
+
+.plotboard-material-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.plotboard-material-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  color: var(--color-foreground);
+  text-align: left;
+  cursor: grab;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.plotboard-material-item:hover {
+  border-color: var(--color-border-hover);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.plotboard-material-kind {
+  width: fit-content;
+  padding: 1px 7px;
+  border-radius: var(--radius-round);
+  background: var(--color-secondary);
+  color: var(--color-foreground-secondary);
+  font-size: var(--font-size-body-xs);
+}
+
+.plotboard-material-kind.kind-character { color: var(--color-entity-character); }
+.plotboard-material-kind.kind-world { color: var(--color-entity-world); }
+.plotboard-material-kind.kind-plot { color: var(--color-entity-plot); }
+
+.plotboard-material-item span:last-child {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-foreground-muted);
+  font-size: var(--font-size-body-xs);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plotboard-canvas-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-background);
+}
+
+.plotboard-pov-axis {
+  flex: 0 0 auto;
+  max-height: 132px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-primary) 8%);
+}
+
+.plotboard-pov-axis-title {
+  margin-bottom: 6px;
+  color: var(--color-primary);
+  font-size: var(--font-size-body-xs);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.plotboard-pov-axis-scroll {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.plotboard-pov-lane {
+  display: grid;
+  grid-template-columns: 86px minmax(180px, 1fr);
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  min-width: 320px;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.plotboard-pov-name {
+  grid-row: 1 / 3;
+  align-self: center;
+  color: var(--color-foreground);
+  font-weight: 800;
+}
+
+.plotboard-pov-cards {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.plotboard-pov-cards button {
+  min-width: 112px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+  color: var(--color-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plotboard-pov-cards button:hover {
+  border-color: var(--color-primary);
+}
+
+.plotboard-pov-cards span,
+.plotboard-pov-fields {
+  color: var(--color-foreground-muted);
+  font-size: var(--font-size-body-xs);
+}
+
+.plotboard-pov-cards strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plotboard-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 20px 20px, color-mix(in srgb, var(--color-primary) 14%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border-subtle) 1px, transparent 1px),
+    linear-gradient(0deg, var(--color-border-subtle) 1px, transparent 1px),
+    var(--color-background);
+  background-size: 40px 40px, 80px 80px, 80px 80px, auto;
+  cursor: grab;
+}
+
+.plotboard-canvas.is-panning,
+.plotboard-canvas:active {
+  cursor: grabbing;
+}
+
+.plotboard-world {
+  position: absolute;
+  inset: 0;
+  width: 4000px;
+  height: 2600px;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.plotboard-links {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.plotboard-link {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.plotboard-link-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+}
+
+.plotboard-link-line {
+  fill: none;
+  stroke: var(--color-border-muted);
+  stroke-width: 2.5;
+}
+
+.plotboard-link marker path {
+  fill: var(--color-border-muted);
+}
+
+.plotboard-link text {
+  fill: var(--color-foreground-secondary);
+  font-size: 12px;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: var(--color-background);
+  stroke-width: 4px;
+}
+
+.plotboard-link.is-selected .plotboard-link-line,
+.plotboard-link.is-selected marker path {
+  stroke: var(--color-primary);
+  fill: var(--color-primary);
+}
+
+.plotboard-link.link-causal .plotboard-link-line { stroke-dasharray: 0; stroke-width: 3; }
+.plotboard-link.link-parallel .plotboard-link-line { stroke-dasharray: 8 5; }
+.plotboard-link.link-flashback .plotboard-link-line { stroke-dasharray: 3 5; }
+.plotboard-link.link-conditional .plotboard-link-line { stroke-dasharray: 12 5 3 5; }
+
+.plotboard-card {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, var(--color-primary) 6%);
+  color: var(--color-foreground);
+  box-shadow: var(--shadow-md);
+  cursor: grab;
+  user-select: none;
+  contain: layout paint style;
+}
+
+.plotboard-card:hover,
+.plotboard-card.is-selected {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-ring), var(--shadow-lg);
+}
+
+.plotboard-card.card-clue_setup,
+.plotboard-card.card-clue_reinforce,
+.plotboard-card.card-clue_payoff {
+  background: color-mix(in srgb, var(--color-surface-raised) 88%, var(--color-entity-plot) 12%);
+}
+
+.plotboard-card.has-validation-error {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-error) 28%, transparent), var(--shadow-lg);
+}
+
+.plotboard-card.has-validation-warning {
+  border-color: var(--color-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 26%, transparent), var(--shadow-lg);
+}
+
+.plotboard-card.is-highlighted {
+  animation: plotboard-card-pulse 900ms ease-in-out 2;
+}
+
+.plotboard-card.is-propagation-highlighted {
+  border-color: #14b8a6;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #14b8a6 28%, transparent), var(--shadow-lg);
+}
+
+.plotboard-card.is-propagation-highlighted::before {
+  position: absolute;
+  left: 10px;
+  top: -11px;
+  padding: 1px 7px;
+  border-radius: var(--radius-round);
+  background: #14b8a6;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  content: '受影响';
+}
+
+@keyframes plotboard-card-pulse {
+  50% { transform: translateY(-4px) scale(1.03); }
+}
+
+.plotboard-card-topline,
+.plotboard-card-bindings {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--color-foreground-muted);
+  font-size: var(--font-size-body-xs);
+}
+
+.plotboard-card h3 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-foreground);
+  font-size: var(--font-size-body-md);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plotboard-card p {
+  display: -webkit-box;
+  min-height: 40px;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-foreground-secondary);
+  font-size: var(--font-size-body-sm);
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.plotboard-card-anchor {
+  position: absolute;
+  right: -13px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-round);
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  cursor: crosshair;
+}
+
+.plotboard-card-anchor.is-linking {
+  box-shadow: 0 0 0 6px var(--color-ring);
+}
+
+.plotboard-card-drag-hint {
+  position: absolute;
+  right: 9px;
+  bottom: 8px;
+  color: var(--color-foreground-muted);
+  font-size: 12px;
+}
+
+.plotboard-selection-box {
+  position: absolute;
+  z-index: 10;
+  border: 1px solid var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  pointer-events: none;
+}
+
+.plotboard-empty-guide {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.plotboard-empty-guide .ant-empty {
+  max-width: 560px;
+  padding: 28px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-2xl);
+  background: var(--color-surface-overlay);
+  backdrop-filter: blur(8px);
+}
+
+.plotboard-field {
+  display: grid;
+  gap: 6px;
+  color: var(--color-foreground);
+  font-size: var(--font-size-body-sm);
+  font-weight: 700;
+}
+
+.plotboard-property-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.plotboard-bound-tags,
+.plotboard-clue-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 28px;
+  padding: 6px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-background);
+}
+
+.plotboard-clue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plotboard-state-deltas {
+  display: grid;
+  gap: 8px;
+}
+
+.plotboard-state-delta-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 1fr 94px 1fr 1fr auto;
+  gap: 6px;
+}
+
+.plotboard-generation-panel,
+.plotboard-validation-panel {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.plotboard-validation-panel {
+  max-height: 280px;
+}
+
+.plotboard-validation-list,
+.plotboard-clue-status-panel,
+.plotboard-inline-validation {
+  display: grid;
+  gap: 8px;
+}
+
+.plotboard-validation-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.plotboard-validation-item small {
+  grid-column: 2;
+  color: var(--color-foreground-muted);
+}
+
+.plotboard-validation-item.severity-error { border-color: var(--color-error); }
+.plotboard-validation-item.severity-warning { border-color: var(--color-warning); }
+
+.plotboard-clue-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plotboard-clue-status-row > span {
+  min-width: 120px;
+  font-weight: 700;
+}
+
+.plotboard-inline-validation .ant-tag {
+  white-space: normal;
+}
+
+.plotboard-diff-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plotboard-diff-row {
+  display: grid;
+  grid-template-columns: auto 140px 160px minmax(180px, 1fr) 120px;
+  gap: 6px;
+  align-items: center;
+}
+
+.plotboard-statusbar {
+  flex: 0 0 24px;
+  justify-content: flex-start;
+  padding: 3px 10px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-foreground-muted);
+  font-size: var(--font-size-body-xs);
+}
+
+.plotboard-statusbar span {
+  padding-right: 10px;
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+@media (max-width: 1180px) {
+  .plotboard-shell {
+    grid-template-columns: 210px minmax(0, 1fr);
+  }
+
+  .plotboard-properties {
+    position: absolute;
+    z-index: 8;
+    right: 0;
+    top: 42px;
+    bottom: 24px;
+    width: 320px;
+    box-shadow: var(--shadow-xl);
+  }
+}
+
 @media (max-width: 980px) {
   .two-column-grid,
   .studio-grid,
@@ -1538,6 +2151,23 @@ button {
   }
 
   .markdown-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .plotboard-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .plotboard-materials {
+    display: none;
+  }
+
+  .plotboard-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .plotboard-diff-row {
     grid-template-columns: 1fr;
   }
 }

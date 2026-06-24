@@ -485,6 +485,7 @@ function buildModelListHeaders(provider: AiProvider, apiKey: string): Record<str
     // Gemini 认证在 query 中，Ollama 无需认证
   } else {
     headers['authorization'] = `Bearer ${apiKey}`
+    headers['x-api-key'] = apiKey
   }
 
   return headers
@@ -509,8 +510,8 @@ export function parseModelListResponse(provider: AiProvider, json: Record<string
     return models
       .map((m) => {
         const name = m.name ?? ''
-        // 去掉 "models/" 前缀
-        return { id: name.startsWith('models/') ? name.slice(7) : name }
+        const id = name.startsWith('models/') ? name.slice(7) : name
+        return { id, name: id, ownedBy: 'gemini' }
       })
       .filter((m) => m.id)
   }
@@ -518,14 +519,14 @@ export function parseModelListResponse(provider: AiProvider, json: Record<string
   if (isOllamaProvider(hint)) {
     const models = Array.isArray(json.models) ? (json.models as Array<{ name?: string }>) : []
     return models
-      .map((m) => ({ id: m.name ?? '' }))
+      .map((m) => ({ id: m.name ?? '', name: m.name ?? '', ownedBy: 'ollama' }))
       .filter((m) => m.id)
   }
 
   // openai / anthropic / deepseek / qwen / openai-compatible / azure-openai
-  const data = Array.isArray(json.data) ? (json.data as Array<{ id?: string; owned_by?: string }>) : []
+  const data = Array.isArray(json.data) ? (json.data as Array<{ id?: string; name?: string; owned_by?: string; ownedBy?: string }>) : []
   return data
-    .map((m) => ({ id: m.id ?? '', ownedBy: m.owned_by }))
+    .map((m) => ({ id: m.id ?? m.name ?? '', name: m.name ?? m.id, ownedBy: m.owned_by ?? m.ownedBy }))
     .filter((m) => m.id)
 }
 

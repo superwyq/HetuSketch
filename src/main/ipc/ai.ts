@@ -7,7 +7,9 @@ import { asAiConnectionKind, asArray, asObject, asOptionalString, asRagQueryRequ
 export function registerAiIpc({ storageService }: IpcRegistrationContext): void {
   ipcMain.handle(IPC_CHANNELS.aiConfigGet, () => storageService.getAiConfig());
   ipcMain.handle(IPC_CHANNELS.aiConfigSave, (_event, input: unknown) => storageService.saveAiConfig(asObject(input)));
-  ipcMain.handle(IPC_CHANNELS.aiConnectionTest, (_event, kind: unknown) => storageService.testAiConnection(asAiConnectionKind(kind)));
+  ipcMain.handle(IPC_CHANNELS.aiConnectionTest, (_event, kind: unknown, input: unknown) =>
+    storageService.testAiConnection(asAiConnectionKind(kind), input && typeof input === 'object' && !Array.isArray(input) ? asObject(input) : undefined)
+  );
   ipcMain.handle(IPC_CHANNELS.aiPromptsGet, () => storageService.getAiPrompts());
   ipcMain.handle(IPC_CHANNELS.aiPromptsSave, (_event, input: unknown) => storageService.saveAiPrompts(asObject(input)));
   ipcMain.handle(IPC_CHANNELS.aiSkillsList, () => storageService.listAiSkills());
@@ -30,8 +32,8 @@ export function registerAiIpc({ storageService }: IpcRegistrationContext): void 
     storageService.foreshadowingReminder(asRequiredString(projectId, 'projectId'), typeof text === 'string' ? text.slice(0, 50_000) : '', asOptionalString(requestId))
   );
 
-  ipcMain.handle(IPC_CHANNELS.aiModelsList, (_event, kind: unknown) =>
-    storageService.listAiModels(kind === 'embedding' ? 'embedding' : 'llm')
+  ipcMain.handle(IPC_CHANNELS.aiModelsList, (_event, kind: unknown, input: unknown) =>
+    storageService.listAiModels(kind === 'embedding' ? 'embedding' : 'llm', input && typeof input === 'object' && !Array.isArray(input) ? asObject(input) : undefined)
   );
 
   registerAiStreamIpc({ storageService });

@@ -7,8 +7,10 @@ import type {
   EntryListQuery,
   EntryType,
   HttpToolConfig,
+  Plotboard,
   PlotStatus,
   ProjectEntry,
+  StateSnapshot,
   ProjectManifest,
   RecentAccessItem,
   VectorIndexState,
@@ -22,7 +24,7 @@ export interface FileIndexRecord {
   entryId?: string;
   entryType?: string;
   filePath: string;
-  fileKind: 'project' | 'entry';
+  fileKind: 'project' | 'entry' | 'plotboard' | 'state-snapshot';
   mtimeMs: number;
   size: number;
   sha256: string;
@@ -203,6 +205,92 @@ export class IndexDatabase {
       .all(projectId, type) as Array<{ id: string; filePath: string }>;
   }
 
+  upsertPlotboard(plotboard: Plotboard, filePath: string): void {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM plotboard_cards_index WHERE plotboard_id = ?').run(plotboard.plotboardId);
+      this.db.prepare('DELETE FROM plotboard_time_index WHERE plotboard_id = ?').run(plotboard.plotboardId);
+      this.db.prepare('DELETE FROM plot_thread_usage_index WHERE plotboard_id = ?').run(plotboard.plotboardId);
+
+      const insertCard = this.db.prepare(
+        `INSERT INTO plotboard_cards_index (plotboard_id, book_id, chapter_id, card_id, card_type, title, fact, character_ids, world_entry_ids, plot_entry_ids, updated_at, file_path)
+         VALUES (@plotboardId, @bookId, @chapterId, @cardId, @cardType, @title, @fact, @characterIds, @worldEntryIds, @plotEntryIds, @updatedAt, @filePath)`
+      );
+      const insertTime = this.db.prepare(
+        `INSERT INTO plotboard_time_index (plotboard_id, book_id, chapter_id, card_id, timecode, pov_character_id, location_world_entry_id, character_ids, sort_x, sort_y)
+         VALUES (@plotboardId, @bookId, @chapterId, @cardId, @timecode, @povCharacterId, @locationWorldEntryId, @characterIds, @sortX, @sortY)`
+      );
+      const insertPlotUsage = this.db.prepare(
+        `INSERT INTO plot_thread_usage_index (plotboard_id, book_id, chapter_id, card_id, plot_entry_id, usage_type, timecode)
+         VALUES (@plotboardId, @bookId, @chapterId, @cardId, @plotEntryId, @usageType, @timecode)`
+      );
+
+      for (const card of plotboard.cards) {
+        insertCard.run({
+          plotboardId: plotboard.plotboardId,
+          bookId: plotboard.bookId,
+          chapterId: plotboard.chapterId,
+          cardId: card.cardId,
+          cardType: card.cardType,
+          title: card.title,
+          fact: card.fact,
+          characterIds: JSON.stringify(card.characterIds ?? []),
+          worldEntryIds: JSON.stringify(card.worldEntryIds ?? []),
+          plotEntryIds: JSON.stringify(card.plotEntryIds ?? []),
+          updatedAt: card.updatedAt ?? plotboard.updatedAt,
+          filePath
+        });
+        insertTime.run({
+          plotboardId: plotboard.plotboardId,
+          bookId: plotboard.bookId,
+          chapterId: plotboard.chapterId,
+          cardId: card.cardId,
+          timecode: card.timecode ?? '',
+          povCharacterId: card.povCharacterId ?? '',
+          locationWorldEntryId: card.locationWorldEntryId ?? '',
+          characterIds: JSON.stringify(card.characterIds ?? []),
+          sortX: card.x,
+          sortY: card.y
+        });
+        for (const plotEntryId of card.plotEntryIds ?? []) {
+          insertPlotUsage.run({
+            plotboardId: plotboard.plotboardId,
+            bookId: plotboard.bookId,
+            chapterId: plotboard.chapterId,
+            cardId: card.cardId,
+            plotEntryId,
+            usageType: card.cardType,
+            timecode: card.timecode ?? ''
+          });
+        }
+      }
+    });
+  }
+
+  upsertStateSnapshot(snapshot: StateSnapshot, bookId: string, filePath: string): void {
+    this.transaction(() => {
+      this.db.prepare('DELETE FROM state_snapshot_index WHERE book_id = ? AND chapter_id = ?').run(bookId, snapshot.chapterId);
+      const insert = this.db.prepare(
+        `INSERT INTO state_snapshot_index (book_id, chapter_id, owner_type, owner_id, field_name, value_json, snapshot_timecode, updated_at, file_path)
+         VALUES (@bookId, @chapterId, @ownerType, @ownerId, @fieldName, @valueJson, @snapshotTimecode, @updatedAt, @filePath)`
+      );
+      for (const state of snapshot.states ?? []) {
+        for (const [fieldName, field] of Object.entries(state.fields ?? {})) {
+          insert.run({
+            bookId,
+            chapterId: snapshot.chapterId,
+            ownerType: state.ownerType,
+            ownerId: state.ownerId,
+            fieldName,
+            valueJson: JSON.stringify(field),
+            snapshotTimecode: snapshot.snapshotTimecode ?? '',
+            updatedAt: snapshot.updatedAt ?? snapshot.createdAt ?? new Date().toISOString(),
+            filePath
+          });
+        }
+      }
+    });
+  }
+
   upsertEntry(entry: ProjectEntry, filePath: string): void {
     const searchable = collectSearchableText(entry);
 
@@ -275,7 +363,7 @@ export class IndexDatabase {
           entry_id?: string;
           entry_type?: string;
           file_path: string;
-          file_kind: 'project' | 'entry';
+          file_kind: FileIndexRecord['fileKind'];
           mtime_ms: number;
           size: number;
           sha256: string;
@@ -300,12 +388,17 @@ export class IndexDatabase {
     };
   }
 
-  removeMissingFiles(existingFilePaths: Set<string>, projectId?: string): number {
-    const statement = this.db.prepare(projectId ? 'SELECT file_path FROM file_index WHERE project_id = ?' : 'SELECT file_path FROM file_index');
-    const rows = (projectId ? statement.all(projectId) : statement.all()) as Array<{ file_path: string }>;
+  removeMissingFiles(existingFilePaths: Set<string>, projectId?: string, fileKinds?: FileIndexRecord['fileKind'][]): number {
+    const rows = (projectId
+      ? this.db.prepare('SELECT file_path, file_kind FROM file_index WHERE project_id = ?').all(projectId)
+      : this.db.prepare('SELECT file_path, file_kind FROM file_index').all()) as Array<{ file_path: string; file_kind: FileIndexRecord['fileKind'] }>;
+    const allowedKinds = fileKinds ? new Set(fileKinds) : undefined;
     let removed = 0;
 
     for (const row of rows) {
+      if (allowedKinds && !allowedKinds.has(row.file_kind)) {
+        continue;
+      }
       if (!existingFilePaths.has(row.file_path)) {
         this.removeFile(row.file_path);
         removed += 1;
@@ -320,6 +413,14 @@ export class IndexDatabase {
 
     if (!record) {
       return;
+    }
+
+    if (record.fileKind === 'plotboard') {
+      this.removePlotboardIndexes(filePath);
+    }
+
+    if (record.fileKind === 'state-snapshot') {
+      this.removeStateSnapshotIndexes(filePath);
     }
 
     if (record.fileKind === 'entry' && record.entryId) {
@@ -353,6 +454,10 @@ export class IndexDatabase {
 
   removeProject(projectId: string): void {
     this.db.prepare('DELETE FROM file_index WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM plotboard_cards_index WHERE book_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM plotboard_time_index WHERE book_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM state_snapshot_index WHERE book_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM plot_thread_usage_index WHERE book_id = ?').run(projectId);
     this.db.prepare('DELETE FROM relations WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM recent_access WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM vector_chunks WHERE project_id = ?').run(projectId);
@@ -767,6 +872,60 @@ export class IndexDatabase {
         warnings_json TEXT NOT NULL DEFAULT '[]'
       );
 
+      CREATE TABLE IF NOT EXISTS plotboard_cards_index (
+        plotboard_id TEXT NOT NULL,
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        card_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        fact TEXT NOT NULL,
+        character_ids TEXT NOT NULL DEFAULT '[]',
+        world_entry_ids TEXT NOT NULL DEFAULT '[]',
+        plot_entry_ids TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        PRIMARY KEY (plotboard_id, card_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS plotboard_time_index (
+        plotboard_id TEXT NOT NULL,
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        timecode TEXT NOT NULL DEFAULT '',
+        pov_character_id TEXT NOT NULL DEFAULT '',
+        location_world_entry_id TEXT NOT NULL DEFAULT '',
+        character_ids TEXT NOT NULL DEFAULT '[]',
+        sort_x REAL NOT NULL DEFAULT 0,
+        sort_y REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (plotboard_id, card_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS state_snapshot_index (
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        field_name TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        snapshot_timecode TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        PRIMARY KEY (book_id, chapter_id, owner_type, owner_id, field_name)
+      );
+
+      CREATE TABLE IF NOT EXISTS plot_thread_usage_index (
+        plotboard_id TEXT NOT NULL,
+        book_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        card_id TEXT NOT NULL,
+        plot_entry_id TEXT NOT NULL,
+        usage_type TEXT NOT NULL,
+        timecode TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (plotboard_id, card_id, plot_entry_id)
+      );
+
       CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
         id UNINDEXED,
         project_id UNINDEXED,
@@ -785,12 +944,29 @@ export class IndexDatabase {
       CREATE INDEX IF NOT EXISTS idx_file_index_project ON file_index(project_id);
       CREATE INDEX IF NOT EXISTS idx_recent_access_project ON recent_access(project_id, accessed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_vector_chunks_project ON vector_chunks(project_id, entry_type);
+      CREATE INDEX IF NOT EXISTS idx_plotboard_cards_book_chapter ON plotboard_cards_index(book_id, chapter_id);
+      CREATE INDEX IF NOT EXISTS idx_plotboard_time_lookup ON plotboard_time_index(book_id, chapter_id, timecode);
+      CREATE INDEX IF NOT EXISTS idx_state_snapshot_lookup ON state_snapshot_index(book_id, chapter_id, owner_type, owner_id);
+      CREATE INDEX IF NOT EXISTS idx_plot_thread_usage_lookup ON plot_thread_usage_index(plot_entry_id, book_id, chapter_id);
     `);
 
     const entryColumns = this.db.prepare('PRAGMA table_info(entries)').all() as Array<{ name: string }>;
     if (!entryColumns.some((column) => column.name === 'metadata_json')) {
       this.db.exec("ALTER TABLE entries ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
     }
+  }
+
+  private removePlotboardIndexes(filePath: string): void {
+    const rows = this.db.prepare('SELECT plotboard_id FROM plotboard_cards_index WHERE file_path = ?').all(filePath) as Array<{ plotboard_id: string }>;
+    for (const row of rows) {
+      this.db.prepare('DELETE FROM plotboard_cards_index WHERE plotboard_id = ?').run(row.plotboard_id);
+      this.db.prepare('DELETE FROM plotboard_time_index WHERE plotboard_id = ?').run(row.plotboard_id);
+      this.db.prepare('DELETE FROM plot_thread_usage_index WHERE plotboard_id = ?').run(row.plotboard_id);
+    }
+  }
+
+  private removeStateSnapshotIndexes(filePath: string): void {
+    this.db.prepare('DELETE FROM state_snapshot_index WHERE file_path = ?').run(filePath);
   }
 
   private upsertRelations(entry: ProjectEntry): void {

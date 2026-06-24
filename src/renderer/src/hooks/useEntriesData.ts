@@ -74,7 +74,10 @@ export function useEntriesData({
     setError(undefined);
     try {
       const summaries = await window.hetuSketch.entries.list({ projectId: selectedProject.id, type, limit: 100 });
-      setItems(summaries.map((item) => summaryToEntry(item, type)));
+      const entries = await Promise.all(
+        summaries.map((item) => window.hetuSketch.entries.get(item.projectId, type, item.id).catch(() => summaryToEntry(item, type)))
+      );
+      setItems(entries);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '条目加载失败');
     } finally {

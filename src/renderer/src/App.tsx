@@ -39,6 +39,7 @@ const ProjectsPage = lazy(() => import('./pages/ProjectsPage').then((m) => ({ de
 const QuickLookupPage = lazy(() => import('./pages/QuickLookupPage').then((m) => ({ default: m.QuickLookupPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const WritingStudioPage = lazy(() => import('./pages/WritingStudioPage').then((m) => ({ default: m.WritingStudioPage })));
+const PlotboardPage = lazy(() => import('./pages/PlotboardPage').then((m) => ({ default: m.PlotboardPage })));
 
 function PageFallback(): React.JSX.Element {
   return <div className="page-suspense-fallback" role="status" aria-label="加载中">加载中…</div>;
@@ -604,8 +605,10 @@ function PrimarySidebar({
         if (activeId === 'characters' || activeId === 'worlds') {
           const type: EntryType = activeId === 'characters' ? 'character' : 'world';
           return window.hetuSketch.entries.list({ projectId: selectedProject.id, type, limit: 300 })
-            .then((summaries) => {
-              const nextEntries = summaries.map((item) => entrySummaryToProjectEntry(item, type));
+            .then(async (summaries) => {
+              const nextEntries = await Promise.all(
+                summaries.map((item) => window.hetuSketch.entries.get(item.projectId, type, item.id).catch(() => entrySummaryToProjectEntry(item, type)))
+              );
               setEntries(nextEntries);
               updateTabNameMap(nextChapters, nextEntries);
             })
@@ -1637,6 +1640,7 @@ function EditorWorkbench({
           <Route path="/data/worlds" element={<Suspense fallback={<PageFallback />}><WorldSettingsDataPage /></Suspense>} />
           <Route path="/data/plots" element={<Suspense fallback={<PageFallback />}><LimitedDatabasePage /></Suspense>} />
           <Route path="/workspace/editor" element={<Suspense fallback={<PageFallback />}><TextEditorWorkspacePage /></Suspense>} />
+          <Route path="/workspace/plotboard" element={<Suspense fallback={<PageFallback />}><PlotboardPage /></Suspense>} />
           <Route path="/setting-sets" element={<Navigate to="/data/characters" replace />} />
           <Route path="/characters" element={<Navigate to="/data/characters" replace />} />
           <Route path="/worlds" element={<Navigate to="/data/worlds" replace />} />
@@ -1728,6 +1732,7 @@ function createTabFromPath(path: string): EditorTab {
     '/data/worlds': entryId ? `世界观 · ${entryName ?? entryId.slice(0, 8)}` : folderId ? `世界观列表 · ${folderId === 'uncategorized' ? '未分类' : folderId.slice(0, 8)}` : '世界观设定库',
     '/data/plots': '灵感数据库',
     '/workspace/editor': chapterId ? `章节 · ${chapterName ?? chapterId.slice(0, 8)}` : '文本编辑器',
+    '/workspace/plotboard': chapterId ? `剧情画布 · ${chapterName ?? chapterId.slice(0, 8)}` : '剧情画布',
     '/projects': '书目管理',
     '/search': '搜索结果',
     '/settings': '系统设置'
@@ -1741,6 +1746,7 @@ const OPENABLE_PAGES: Array<{ path: string; label: string }> = [
   { path: '/data/worlds', label: '世界观设定库' },
   { path: '/data/plots', label: '灵感数据库' },
   { path: '/workspace/editor', label: '文本编辑器' },
+  { path: '/workspace/plotboard', label: '剧情画布' },
   { path: '/projects', label: '书目管理' },
   { path: '/search', label: '搜索结果' },
   { path: '/settings', label: '系统设置' }

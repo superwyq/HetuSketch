@@ -25,15 +25,57 @@ Object.defineProperty(globalThis, 'crypto', {
   configurable: true
 });
 
+const electronMock = await import('electron');
 const { createStreamInvoker } = await import('./index.js');
 
-describe('createStreamInvoker', () => {
+describe('preload api', () => {
   beforeEach(() => {
     ipcRendererMock.removeAllListeners();
     ipcRendererMock.invoke.mockReset();
     ipcRendererMock.send.mockReset();
     ipcRendererMock.removeAllListeners.mockClear();
     randomUUID.mockReset();
+  });
+
+  it('暴露剧情画布 API 并映射到对应 IPC 通道', async () => {
+    const exposed = vi.mocked(electronMock.contextBridge.exposeInMainWorld).mock.calls[0]?.[1] as {
+      plotboards: {
+        create: (input: unknown) => Promise<unknown>;
+        open: (bookId: string, chapterId: string) => Promise<unknown>;
+        save: (plotboard: unknown) => Promise<unknown>;
+        saveSnapshot: (bookId: string, snapshot: unknown) => Promise<unknown>;
+        loadSnapshot: (bookId: string, chapterId: string) => Promise<unknown>;
+        syncIndex: (bookId: string) => Promise<unknown>;
+        exportOutline: (bookId: string, chapterId: string) => Promise<unknown>;
+        saveChapterSnapshot: (bookId: string, chapterId: string) => Promise<unknown>;
+        writeGeneratedMarkdown: (input: unknown) => Promise<unknown>;
+        validate: (input: unknown) => Promise<unknown>;
+      };
+    };
+    const plotboard = { bookId: 'book-1', chapterId: 'ch-1' };
+    const snapshot = { chapterId: 'ch-1', states: [] };
+
+    await exposed.plotboards.create(plotboard);
+    await exposed.plotboards.open('book-1', 'ch-1');
+    await exposed.plotboards.save(plotboard);
+    await exposed.plotboards.saveSnapshot('book-1', snapshot);
+    await exposed.plotboards.loadSnapshot('book-1', 'ch-1');
+    await exposed.plotboards.syncIndex('book-1');
+    await exposed.plotboards.exportOutline('book-1', 'ch-1');
+    await exposed.plotboards.saveChapterSnapshot('book-1', 'ch-1');
+    await exposed.plotboards.writeGeneratedMarkdown({ bookId: 'book-1', chapterId: 'ch-1', markdown: '# 正文' });
+    await exposed.plotboards.validate({ bookId: 'book-1', chapterId: 'ch-1' });
+
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsCreate, plotboard);
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsOpen, 'book-1', 'ch-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsSave, plotboard);
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsSaveSnapshot, 'book-1', snapshot);
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsLoadSnapshot, 'book-1', 'ch-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsSyncIndex, 'book-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsExportOutline, 'book-1', 'ch-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsSaveChapterSnapshot, 'book-1', 'ch-1');
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsWriteGeneratedMarkdown, { bookId: 'book-1', chapterId: 'ch-1', markdown: '# 正文' });
+    expect(ipcRendererMock.invoke).toHaveBeenCalledWith(IPC_CHANNELS.plotboardsValidate, { bookId: 'book-1', chapterId: 'ch-1' });
   });
 
   it('并发流只清理自身 listener，避免 removeAllListeners 误伤动态 channel', async () => {

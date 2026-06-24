@@ -361,32 +361,65 @@ export class AiService {
     this.indexDb.setConfigRecord('agents', JSON.stringify(agents));
   }
 
-  async testConnection(kind: 'llm' | 'embedding'): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
-    const config = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
-    if (!config.enabled || !config.apiKeySet) {
-      return { ok: false, message: `${kind} 未启用或未配置 API Key` };
+  async testConnection(kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
+    const stored = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
+    const config = {
+      ...stored,
+      ...input,
+      baseUrl: input?.baseUrl?.trim() || stored.baseUrl,
+      model: input?.model?.trim() || stored.model
+    };
+    const apiKey = input?.apiKey?.trim() || this.decryptApiKey(kind === 'llm' ? 'ai.llm' : 'ai.embedding') || '';
+    if (!config.enabled || (!apiKey && config.provider !== 'ollama')) {
+      return { ok: false, message: `${kind} 未启用或未配置 API Key`, provider: config.provider, model: config.model };
     }
 
     try {
       if (kind === 'llm') {
-        const result = await this.callLlm([{ role: 'user', content: '只返回 {"ok":true}' }], { maxTokens: 32 });
-        return { ok: Boolean(result.content), message: '连接成功', provider: result.provider, model: result.model };
+        const requestConfig: LlmRequestConfig = {
+          provider: config.provider,
+          baseUrl: config.baseUrl,
+          model: config.model,
+          apiKey,
+          temperature: config.temperature,
+          topP: config.topP,
+          maxTokens: 32,
+          timeoutMs: config.timeoutMs
+        };
+        const { url, headers, body } = buildLlmRequest(requestConfig, [{ role: 'user', content: '只返回 {"ok":true}' }], false);
+        const response = await this.fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+        const parsed = parseLlmResponse(config.provider, await parseJsonResponse(response));
+        return { ok: Boolean(parsed.content), message: '连接成功', provider: config.provider, model: config.model };
       }
 
-      const vector = await this.embedText('连接测试');
+      const requestConfig: LlmRequestConfig = {
+        provider: config.provider,
+        baseUrl: config.baseUrl,
+        model: config.model,
+        apiKey,
+        timeoutMs: config.timeoutMs
+      };
+      const { url, headers, body } = buildEmbeddingRequest(requestConfig, '连接测试');
+      const response = await this.fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+      const vector = parseEmbeddingResponse(config.provider, await parseJsonResponse(response));
       return { ok: vector.length > 0, message: '连接成功', provider: config.provider, model: config.model };
     } catch (error) {
       return { ok: false, message: summarizeError(error), provider: config.provider, model: config.model };
     }
   }
 
-  async listModels(kind: 'llm' | 'embedding'): Promise<ModelInfo[]> {
-    const config = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
-    if (!config.enabled || !config.apiKeySet) {
-      return [];
+  async listModels(kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']): Promise<ModelInfo[]> {
+    const stored = kind === 'llm' ? this.getConfig().llm : this.getConfig().embedding;
+    const config = {
+      ...stored,
+      ...input,
+      baseUrl: input?.baseUrl?.trim() || stored.baseUrl,
+      model: input?.model?.trim() || stored.model
+    };
+    const apiKey = input?.apiKey?.trim() || this.decryptApiKey(kind === 'llm' ? 'ai.llm' : 'ai.embedding') || '';
+    if (!apiKey && config.provider !== 'ollama') {
+      throw new Error('请先填写或保存 API Key');
     }
-    const apiKey = this.decryptApiKey(kind === 'llm' ? 'ai.llm' : 'ai.embedding');
-    if (!apiKey) return [];
 
     const requestConfig: LlmRequestConfig = {
       provider: config.provider,
@@ -400,11 +433,17 @@ export class AiService {
     const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 30_000);
     try {
       const response = await this.fetchImpl(url, { method: 'GET', headers, signal: controller.signal });
+      const text = await response.text();
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${await response.text().catch(() => '')}`);
+        throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
       }
-      const json = await response.json() as Record<string, unknown>;
-      return parseModelListResponse(config.provider, json);
+      const json = JSON.parse(text) as Record<string, unknown>;
+      return mergeModels(config.customModels ?? [], parseModelListResponse(config.provider, json));
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error('模型列表响应不是有效 JSON');
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -771,6 +810,18 @@ export class AiService {
     }
   }
 
+  isLlmReady(): boolean {
+    return this.canUseLlm();
+  }
+
+  generateText(messages: LlmMessage[], options: { maxTokens?: number } = {}): Promise<LlmJsonResult> {
+    return this.callLlm(messages, options);
+  }
+
+  streamText(messages: LlmMessage[], options: { maxTokens?: number } = {}): AsyncGenerator<AiStreamChunk> {
+    return this.callLlmStream(messages, options);
+  }
+
   async *streamForeshadowingReminder(projectId: string, text: string, _requestId?: string): AsyncGenerator<AiStreamChunk> {
     if (!this.isSkillEnabled('foreshadowing')) {
       yield { type: 'error', error: '伏笔提醒技能已禁用' };
@@ -818,6 +869,9 @@ export class AiService {
     }
     if (input.maxTokens !== undefined) {
       next.maxTokens = clampNumber(input.maxTokens, 1, 32_000, 1_000);
+    }
+    if (input.customModels !== undefined) {
+      next.customModels = normalizeModelList(input.customModels);
     }
 
     if (input.apiKey !== undefined) {
@@ -1239,8 +1293,36 @@ function normalizeModelConfig(record: string | undefined, fallbackProvider: AiCo
     apiKeySet: typeof parsed.encryptedApiKey === 'string' && parsed.encryptedApiKey.length > 0,
     temperature: parsed.temperature !== undefined ? clampNumber(Number(parsed.temperature), 0, 2, 0.2) : undefined,
     topP: parsed.topP !== undefined ? clampNumber(Number(parsed.topP), 0, 1, 0.9) : undefined,
-    maxTokens: parsed.maxTokens !== undefined ? clampNumber(Number(parsed.maxTokens), 1, 32_000, 1_000) : undefined
+    maxTokens: parsed.maxTokens !== undefined ? clampNumber(Number(parsed.maxTokens), 1, 32_000, 1_000) : undefined,
+    customModels: normalizeModelList(parsed.customModels)
   };
+}
+
+function normalizeModelList(value: unknown): ModelInfo[] {
+  if (!Array.isArray(value)) return [];
+  const byId = new Map<string, ModelInfo>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id.trim().slice(0, 200) : '';
+    if (!id) continue;
+    const name = typeof record.name === 'string' ? record.name.trim().slice(0, 200) : undefined;
+    const ownedBy = typeof record.ownedBy === 'string' ? record.ownedBy.trim().slice(0, 120) : undefined;
+    const source = record.source === 'remote' ? 'remote' : 'manual';
+    byId.set(id, { id, name: name || id, ownedBy, source });
+  }
+  return [...byId.values()];
+}
+
+function mergeModels(customModels: ModelInfo[], remoteModels: ModelInfo[]): ModelInfo[] {
+  const merged = new Map<string, ModelInfo>();
+  for (const model of remoteModels) {
+    merged.set(model.id, { ...model, name: model.name || model.id, source: 'remote' });
+  }
+  for (const model of customModels) {
+    merged.set(model.id, { ...merged.get(model.id), ...model, name: model.name || model.id, source: model.source ?? 'manual' });
+  }
+  return [...merged.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function isOpenAiCompatibleProvider(provider: AiProvider): boolean {

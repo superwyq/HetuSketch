@@ -425,6 +425,266 @@ export interface ProjectImportResult {
   summary: IndexSyncSummary;
 }
 
+export type PlotCardType = 'event' | 'dialogue' | 'battle' | 'clue_setup' | 'clue_reinforce' | 'clue_payoff' | 'transition' | 'narration';
+
+export type PlotLinkType = 'sequence' | 'causal' | 'parallel' | 'flashback' | 'conditional';
+
+export type StateOwnerType = 'character' | 'world' | 'plot' | 'chapter';
+
+export type StateValueType = 'text' | 'number' | 'enum' | 'boolean';
+
+export type StateVisibility = 'global' | 'chapter' | 'scene';
+
+export type StateDeltaOperator = 'set' | 'increase' | 'decrease' | 'append' | 'remove';
+
+export type PlotboardValidationCategory = 'timeline' | 'character-state' | 'behavior-redline' | 'world-rule' | 'plot-thread' | 'chapter-continuity';
+
+export type PlotboardValidationSeverity = 'info' | 'warning' | 'error';
+
+export interface PlotboardViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export interface StateFieldValue {
+  value: unknown;
+  semanticPrompt?: string;
+}
+
+export interface StateDelta {
+  ownerType: StateOwnerType;
+  ownerId: string;
+  fieldName: string;
+  operator: StateDeltaOperator;
+  value: unknown;
+  reason?: string;
+}
+
+export interface PlotCard {
+  cardId: string;
+  title: string;
+  fact: string;
+  cardType: PlotCardType;
+  timecode?: string;
+  povCharacterId?: string;
+  locationWorldEntryId: string;
+  characterIds: string[];
+  worldEntryIds: string[];
+  plotEntryIds: string[];
+  stateDeltas: StateDelta[];
+  narrativeTone: string[];
+  detailLevel?: number;
+  generationInstruction?: string;
+  x: number;
+  y: number;
+  createdAt: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
+export interface PlotLink {
+  linkId: string;
+  sourceCardId: string;
+  targetCardId: string;
+  linkType: PlotLinkType;
+  motivation?: string;
+  condition?: string;
+  [key: string]: unknown;
+}
+
+export interface StateTemplate {
+  templateId: string;
+  ownerType: StateOwnerType;
+  ownerId: string;
+  fieldName: string;
+  valueType: StateValueType;
+  currentValue: unknown;
+  semanticPrompt: string;
+  visibility: StateVisibility;
+  [key: string]: unknown;
+}
+
+export interface StateSnapshotItem {
+  ownerType: StateOwnerType;
+  ownerId: string;
+  fields: Record<string, StateFieldValue>;
+  [key: string]: unknown;
+}
+
+export interface StateSnapshot {
+  schemaVersion: 1;
+  bookId?: string;
+  chapterId: string;
+  snapshotTimecode?: string;
+  states: StateSnapshotItem[];
+  sourceDiffIds: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface StateDiff {
+  diffId: string;
+  targetType: StateOwnerType;
+  targetId: string;
+  fieldName: string;
+  from: unknown;
+  to: unknown;
+  reason: string;
+  sourceCardId?: string;
+  confidence?: string;
+  status?: 'suggested' | 'accepted' | 'modified' | 'rejected';
+  [key: string]: unknown;
+}
+
+export type PlotboardGenerationMode = 'single_card' | 'selection' | 'full_chapter' | 'continue' | 'rewrite';
+
+export interface PlotboardGenerationSettings {
+  mode: PlotboardGenerationMode;
+  selectedCardIds?: string[];
+  userInstruction?: string;
+  targetWords?: number;
+  appendToExisting?: boolean;
+  rewriteStrategy?: 'replace_all' | 'append' | 'mark_stale_and_append';
+}
+
+export interface PlotboardAiContext {
+  plotboard: Pick<Plotboard, 'plotboardId' | 'bookId' | 'chapterId'>;
+  mode: PlotboardGenerationMode;
+  cards: PlotCard[];
+  links: PlotLink[];
+  characters: Array<Pick<CharacterEntry, 'id' | 'title' | 'summary' | 'content' | 'personalityTags' | 'redLines' | 'customFields'>>;
+  worldRules: Array<Pick<WorldEntry, 'id' | 'title' | 'summary' | 'content' | 'category' | 'rules' | 'customFields'>>;
+  plotClues: Array<Pick<PlotEntry, 'id' | 'title' | 'summary' | 'content' | 'status' | 'setupChapter' | 'expectedPayoffChapter' | 'customFields'>>;
+  stateTemplates: StateTemplate[];
+  chapterSnapshot: StateSnapshot;
+  flashbackSnapshot?: StateSnapshot;
+  sceneDeltas: StateDelta[];
+  neighborSummaries: Array<{ cardId: string; title: string; fact: string; relation: 'previous' | 'next' | 'linked' }>;
+  generationSettings: PlotboardGenerationSettings;
+}
+
+export interface PlotboardGenerationRequest {
+  bookId: string;
+  chapterId: string;
+  settings: PlotboardGenerationSettings;
+}
+
+export interface PlotboardGenerationResult {
+  requestId: string;
+  status: 'ok' | 'degraded' | 'error';
+  markdown: string;
+  stateDiffs: StateDiff[];
+  context: PlotboardAiContext;
+  warnings: string[];
+  usage?: AiAgentResponse<unknown>['usage'];
+  error?: string;
+}
+
+export interface StateDiffSettlementInput {
+  bookId: string;
+  chapterId: string;
+  diffs: StateDiff[];
+}
+
+export interface StateDiffSettlementResult {
+  snapshot: StateSnapshot;
+  appliedDiffIds: string[];
+  rejectedDiffIds: string[];
+}
+
+export interface PlotboardMarkdownLocation {
+  sourceCardId?: string;
+  paragraphIndex: number;
+  excerpt: string;
+}
+
+export interface PlotboardValidationFinding {
+  id: string;
+  category: PlotboardValidationCategory;
+  severity: PlotboardValidationSeverity;
+  message: string;
+  suggestion?: string;
+  cardId?: string;
+  relatedCardIds?: string[];
+  linkId?: string;
+  chapterId?: string;
+  markdownRange?: { start: number; end: number };
+  markdownLocation?: PlotboardMarkdownLocation;
+  entryId?: string;
+  entryType?: EntryType;
+  rule?: string;
+  [key: string]: unknown;
+}
+
+export interface PlotClueStatusHint {
+  plotEntryId: string;
+  title?: string;
+  status?: PlotStatus;
+  setupCardIds: string[];
+  reinforceCardIds: string[];
+  payoffCardIds: string[];
+  shouldResolve: boolean;
+}
+
+export interface PlotboardValidationResult {
+  ok: boolean;
+  checkedAt: string;
+  summary: {
+    timelineConflicts: number;
+    characterStateConflicts: number;
+    behaviorRedlineConflicts: number;
+    worldRuleConflicts: number;
+    plotThreadConflicts: number;
+    chapterContinuityConflicts: number;
+    warningCount: number;
+    errorCount: number;
+  };
+  findings: PlotboardValidationFinding[];
+  clueStatusHints: PlotClueStatusHint[];
+}
+
+export interface PlotboardValidationRequest {
+  bookId: string;
+  chapterId: string;
+  markdown?: string;
+}
+
+export interface Plotboard {
+  schemaVersion: 1;
+  plotboardId: string;
+  bookId: string;
+  chapterId: string;
+  projectId?: string;
+  settingSetId?: string;
+  cards: PlotCard[];
+  links: PlotLink[];
+  stateTemplates?: StateTemplate[];
+  viewport: PlotboardViewport;
+  createdAt: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
+export interface ChapterBodySnapshotResult {
+  snapshotId: string;
+  filePath: string;
+  createdAt: string;
+}
+
+export interface GeneratedMarkdownWriteInput {
+  bookId: string;
+  chapterId: string;
+  markdown: string;
+  preserveSnapshot?: boolean;
+}
+
+export interface GeneratedMarkdownWriteResult {
+  chapter: ChapterNode;
+  snapshot?: ChapterBodySnapshotResult;
+}
+
 export interface ProjectExportResult {
   projectId: string;
   destinationPath: string;
@@ -444,6 +704,13 @@ export interface VectorIndexState {
 
 export type AiProvider = 'openai' | 'anthropic' | 'azure-openai' | 'gemini' | 'ollama' | 'deepseek' | 'qwen' | 'openai-compatible';
 
+export interface ModelInfo {
+  id: string;
+  name?: string;
+  ownedBy?: string;
+  source?: 'remote' | 'manual';
+}
+
 export interface AiModelConfigPublic {
   enabled: boolean;
   provider: AiProvider;
@@ -454,6 +721,7 @@ export interface AiModelConfigPublic {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  customModels: ModelInfo[];
 }
 
 export interface AiConfig {
@@ -471,12 +739,7 @@ export interface AiModelConfigSaveInput {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
-}
-
-export interface ModelInfo {
-  id: string;
-  name?: string;
-  ownedBy?: string;
+  customModels?: ModelInfo[];
 }
 
 export interface AiStreamChunk {

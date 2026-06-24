@@ -1,10 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createCipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
 import { join } from 'node:path';
 import { hostname, tmpdir, userInfo } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CharacterEntry } from '../../shared/storageTypes.js';
+import type { CharacterEntry, Plotboard, StateSnapshot } from '../../shared/storageTypes.js';
 import { StorageService } from './storageService.js';
+
+const TEST_API_KEY_PLACEHOLDER = 'TEST_API_KEY_PLACEHOLDER_DO_NOT_USE';
+const TEST_LEGACY_API_KEY_PLACEHOLDER = 'TEST_LEGACY_API_KEY_PLACEHOLDER_DO_NOT_USE';
+const TEST_OLLAMA_API_KEY_PLACEHOLDER = 'TEST_OLLAMA_NO_KEY_REQUIRED';
+const TEST_TEMP_API_KEY_PLACEHOLDER = 'TEST_TEMP_API_KEY_PLACEHOLDER_DO_NOT_USE';
 
 const tempRoots: string[] = [];
 
@@ -55,6 +60,75 @@ function encryptLegacyApiKey(plainText: string, scope: string): string {
 }
 
 describe('StorageService', () => {
+  it('creates, stores, indexes and exports plotboards with state snapshots', async () => {
+    const service = new StorageService(await createTempRoot());
+    await service.initialize();
+    const book = await service.createBook({ id: 'book-plotboard', title: '剧情画布作品' });
+    const volume = await service.createVolume({ bookId: book.id, id: 'vol-main', title: '第一卷' });
+    const chapter = await service.createChapter({ bookId: book.id, volumeId: volume.id, id: 'ch-plot', title: '第一章', content: '旧正文' });
+
+    const created = await service.createPlotboard({ bookId: book.id, chapterId: chapter.id, projectId: 'project-1', settingSetId: 'setting-1' });
+    expect(created).toMatchObject({ bookId: book.id, chapterId: chapter.id, cards: [], links: [] });
+
+    const plotboard: Plotboard = {
+      ...created,
+      customFutureField: { preserved: true },
+      cards: [{
+        cardId: 'card-1',
+        title: '发现密信',
+        fact: '张三在密室发现李四的密信。',
+        cardType: 'clue_setup',
+        timecode: 'Day 3 / 18:00',
+        povCharacterId: 'char-zhangsan',
+        locationWorldEntryId: 'world-room',
+        characterIds: ['char-zhangsan'],
+        worldEntryIds: ['world-room'],
+        plotEntryIds: ['plot-letter'],
+        stateDeltas: [{ ownerType: 'character', ownerId: 'char-zhangsan', fieldName: '信任度_李四', operator: 'decrease', value: 10, reason: '密信暴露' }],
+        narrativeTone: ['紧张'],
+        detailLevel: 3,
+        generationInstruction: '突出怀疑感',
+        x: 120,
+        y: 80,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+        unknownCardField: 'keep'
+      }],
+      links: [{ linkId: 'link-1', sourceCardId: 'card-1', targetCardId: 'card-2', linkType: 'causal', motivation: '密信导致怀疑', unknownLinkField: 'keep' }]
+    };
+
+    const saved = await service.savePlotboard(plotboard);
+    expect(saved.customFutureField).toEqual({ preserved: true });
+    const loaded = await service.openPlotboard(book.id, chapter.id);
+    expect(loaded.cards[0].unknownCardField).toBe('keep');
+    expect(loaded.links[0].unknownLinkField).toBe('keep');
+    expect(await readFile(join(service.paths.booksRoot, book.id, 'plotboards', `${chapter.id}.plotboard.json`), 'utf8')).toContain('customFutureField');
+
+    const snapshot: StateSnapshot = {
+      schemaVersion: 1,
+      chapterId: chapter.id,
+      snapshotTimecode: 'Day 3 / 00:00',
+      states: [{ ownerType: 'character', ownerId: 'char-zhangsan', fields: { 伤势: { value: '轻伤', semanticPrompt: '行动略受影响' } } }],
+      sourceDiffIds: ['diff-1'],
+      extraSnapshotField: 'keep'
+    };
+    const savedSnapshot = await service.saveStateSnapshot(book.id, snapshot);
+    expect(savedSnapshot.extraSnapshotField).toBe('keep');
+    await expect(service.loadStateSnapshot(book.id, chapter.id)).resolves.toMatchObject({ snapshotTimecode: 'Day 3 / 00:00' });
+
+    const outline = await service.exportPlotboardOutline(book.id, chapter.id);
+    expect(outline).toContain('发现密信');
+    expect(outline).toContain('张三在密室发现李四的密信。');
+
+    const generated = await service.writeGeneratedMarkdown({ bookId: book.id, chapterId: chapter.id, markdown: '# 新正文' });
+    expect(generated.snapshot?.filePath).toBeTruthy();
+    await expect(readFile(generated.snapshot!.filePath, 'utf8')).resolves.toBe('旧正文');
+    expect(generated.chapter.content).toBe('# 新正文');
+    await expect(service.syncPlotboardIndex(book.id)).resolves.toMatchObject({ errors: [] });
+
+    await service.close();
+  });
+
   it('creates project structure, stores JSON entries and searches through FTS5', async () => {
     const service = new StorageService(await createTempRoot());
     await service.initialize();
@@ -140,10 +214,10 @@ describe('StorageService', () => {
     await service.createEntry({ projectId: project.id, type: 'world', title: '灵气规则', content: '灵气不可凭空生成。', rules: ['灵气不可凭空生成'] });
 
     expect(service.getAiConfig().llm.apiKeySet).toBe(false);
-    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://example.com/v1', model: 'mock-llm', apiKey: 'secret-key' } });
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://example.com/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER } });
     const publicConfig = service.getAiConfig();
     expect(publicConfig.llm).toMatchObject({ enabled: true, apiKeySet: true, model: 'mock-llm' });
-    expect(JSON.stringify(publicConfig)).not.toContain('secret-key');
+    expect(JSON.stringify(publicConfig)).not.toContain(TEST_API_KEY_PLACEHOLDER);
 
     service.saveAiConfig({ llm: { enabled: false, apiKey: '' } });
     const enhanced = await service.validateContentEnhanced({ projectId: project.id, text: '灵气规则显示：灵气不可凭空生成。' });
@@ -170,7 +244,7 @@ describe('StorageService', () => {
     const plot = await service.createEntry({ projectId: project.id, type: 'plot', title: '玉佩伏笔', content: '玉佩会在终章揭示主角身世。', status: 'open' });
     await service.createEntry({ projectId: project.id, type: 'world', title: '灵气规则', content: '灵气来自地脉。', rules: ['灵气来自地脉'] });
 
-    service.saveAiConfig({ embedding: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://embed.example/v1', model: 'mock-embed', apiKey: 'embed-key' } });
+    service.saveAiConfig({ embedding: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://embed.example/v1', model: 'mock-embed', apiKey: TEST_API_KEY_PLACEHOLDER } });
     expect(service.getVectorIndexState(project.id)).toMatchObject({ status: 'dirty', dirty: true });
     const build = await service.buildVectorIndex(project.id);
     expect(build).toMatchObject({ status: 'ready', dirty: false, embeddedCount: 2 });
@@ -212,6 +286,49 @@ describe('StorageService', () => {
     await service.close();
   });
 
+  it('keeps character and world entries visible after plotboard index sync', async () => {
+    const service = new StorageService(await createTempRoot());
+    await service.initialize();
+    const project = await service.createProject({ id: 'entry-visibility-book', name: '条目展示作品', type: 'original' });
+    const book = await service.createBook({ id: project.id, title: project.name });
+    const volume = await service.createVolume({ bookId: book.id, id: 'vol-main', title: '第一卷' });
+    const chapter = await service.createChapter({ bookId: book.id, volumeId: volume.id, id: 'ch-main', title: '第一章' });
+
+    const character = await service.createEntry({
+      projectId: project.id,
+      type: 'character',
+      title: '林溪',
+      summary: '冷静的主角',
+      content: '林溪持有星盘。',
+      role: 'protagonist',
+      personalityTags: ['冷静'],
+      redLines: ['绝不背叛同伴']
+    });
+    const world = await service.createEntry({
+      projectId: project.id,
+      type: 'world',
+      title: '星盘规则',
+      summary: '不可复活死者',
+      content: '星盘只能观测命运。',
+      category: 'magic',
+      rules: ['不可复活死者']
+    });
+
+    await service.createPlotboard({ bookId: book.id, chapterId: chapter.id, projectId: project.id });
+    await service.syncPlotboardIndex(book.id);
+
+    await expect(service.listEntries({ projectId: project.id, type: 'character' })).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: character.id, title: '林溪' })])
+    );
+    await expect(service.listEntries({ projectId: project.id, type: 'world' })).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: world.id, title: '星盘规则' })])
+    );
+    await expect(service.readEntry(project.id, 'character', character.id)).resolves.toMatchObject({ role: 'protagonist', redLines: ['绝不背叛同伴'] });
+    await expect(service.readEntry(project.id, 'world', world.id)).resolves.toMatchObject({ category: 'magic', rules: ['不可复活死者'] });
+
+    await service.close();
+  });
+
   it('manages entry CRUD, recent access, dashboard stats and basic validation', async () => {
     const service = new StorageService(await createTempRoot());
     await service.initialize();
@@ -242,7 +359,7 @@ describe('StorageService', () => {
       relatedCharacters: [character.id]
     });
 
-    expect(service.listEntries({ projectId: project.id })).toHaveLength(3);
+    await expect(service.listEntries({ projectId: project.id })).resolves.toHaveLength(3);
     await expect(service.getDashboardStats(project.id)).resolves.toMatchObject({
       entryCount: 3,
       byType: { character: 1, world: 1, plot: 1 },
@@ -289,7 +406,7 @@ describe('StorageService', () => {
     );
 
     await service.deleteEntry(project.id, 'world', world.id);
-    expect(service.listEntries({ projectId: project.id, type: 'world' })).toHaveLength(0);
+    await expect(service.listEntries({ projectId: project.id, type: 'world' })).resolves.toHaveLength(0);
 
     await service.close();
   });
@@ -305,7 +422,7 @@ describe('StorageService', () => {
         provider: 'anthropic',
         baseUrl: 'https://api.anthropic.com/v1',
         model: 'claude-3-5-sonnet-20241022',
-        apiKey: 'anthropic-key',
+        apiKey: TEST_API_KEY_PLACEHOLDER,
         temperature: 0.3,
         topP: 0.9,
         maxTokens: 4096,
@@ -323,7 +440,7 @@ describe('StorageService', () => {
       maxTokens: 4096,
       timeoutMs: 60_000
     });
-    expect(JSON.stringify(config)).not.toContain('anthropic-key');
+    expect(JSON.stringify(config)).not.toContain(TEST_API_KEY_PLACEHOLDER);
 
     // Gemini Provider
     service.saveAiConfig({
@@ -332,7 +449,7 @@ describe('StorageService', () => {
         provider: 'gemini',
         baseUrl: 'https://generativelanguage.googleapis.com',
         model: 'gemini-1.5-flash',
-        apiKey: 'gemini-key'
+        apiKey: TEST_API_KEY_PLACEHOLDER
       }
     });
     config = service.getAiConfig();
@@ -345,7 +462,7 @@ describe('StorageService', () => {
         provider: 'azure-openai',
         baseUrl: 'https://my-resource.openai.azure.com/openai/deployments/my-deployment',
         model: 'gpt-4o',
-        apiKey: 'azure-key'
+        apiKey: TEST_API_KEY_PLACEHOLDER
       }
     });
     config = service.getAiConfig();
@@ -358,7 +475,7 @@ describe('StorageService', () => {
         provider: 'ollama',
         baseUrl: 'http://localhost:11434',
         model: 'llama3',
-        apiKey: 'unused'
+        apiKey: TEST_OLLAMA_API_KEY_PLACEHOLDER
       }
     });
     config = service.getAiConfig();
@@ -371,7 +488,7 @@ describe('StorageService', () => {
         provider: 'ollama',
         baseUrl: 'http://localhost:11434',
         model: 'nomic-embed-text',
-        apiKey: 'unused'
+        apiKey: TEST_OLLAMA_API_KEY_PLACEHOLDER
       }
     });
     config = service.getAiConfig();
@@ -397,20 +514,18 @@ describe('StorageService', () => {
     await service.initialize();
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiKey: 'list-key' }
+      llm: { enabled: true, provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
 
     const models = await service.listAiModels('llm');
     expect(models).toEqual([
-      { id: 'gpt-4o', ownedBy: 'openai' },
-      { id: 'gpt-4o-mini', ownedBy: 'openai' }
+      { id: 'gpt-4o', name: 'gpt-4o', ownedBy: 'openai', source: 'remote' },
+      { id: 'gpt-4o-mini', name: 'gpt-4o-mini', ownedBy: 'openai', source: 'remote' }
     ]);
     expect(fetchCalls[0]).toContain('/models');
 
-    // 未配置时返回空数组
     service.saveAiConfig({ llm: { enabled: false, apiKey: '' } });
-    const empty = await service.listAiModels('llm');
-    expect(empty).toEqual([]);
+    await expect(service.listAiModels('llm')).rejects.toThrow('请先填写或保存 API Key');
 
     await service.close();
   });
@@ -429,11 +544,14 @@ describe('StorageService', () => {
     await service.initialize();
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3', apiKey: 'unused' }
+      llm: { enabled: true, provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3', apiKey: TEST_OLLAMA_API_KEY_PLACEHOLDER }
     });
 
     const models = await service.listAiModels('llm');
-    expect(models).toEqual([{ id: 'llama3:latest' }, { id: 'qwen2:7b' }]);
+    expect(models).toEqual([
+      { id: 'llama3:latest', name: 'llama3:latest', ownedBy: 'ollama', source: 'remote' },
+      { id: 'qwen2:7b', name: 'qwen2:7b', ownedBy: 'ollama', source: 'remote' }
+    ]);
     expect(fetchCalls[0]).toContain('/api/tags');
 
     await service.close();
@@ -455,7 +573,7 @@ describe('StorageService', () => {
     await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '不可违背。', rules: ['不可违背'] });
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'stream-key' }
+      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
 
     const chunks = await collectChunks(
@@ -489,7 +607,7 @@ describe('StorageService', () => {
 
     // 先建向量索引
     service.saveAiConfig({
-      embedding: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://embed.example/v1', model: 'mock-embed', apiKey: 'embed-key' }
+      embedding: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://embed.example/v1', model: 'mock-embed', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
     await service.buildVectorIndex(project.id);
 
@@ -501,7 +619,7 @@ describe('StorageService', () => {
 
     // 启用 LLM 后应能流式输出
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'stream-key' }
+      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
     const chunks = await collectChunks(
       service.streamRagAnswer({ projectId: project.id, query: '玉佩作用', topK: 1, retrievalMode: 'hybrid' })
@@ -523,7 +641,7 @@ describe('StorageService', () => {
     await service.createEntry({ projectId: project.id, type: 'character', title: '主角', content: '主角设定。' });
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'skill-key' }
+      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
 
     // 禁用 setting_completion 技能
@@ -608,7 +726,7 @@ describe('StorageService', () => {
     await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' }
+      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
 
     // 注册 HTTP 工具并启用 http_tools 技能
@@ -658,7 +776,7 @@ describe('StorageService', () => {
     await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
 
     service.saveAiConfig({
-      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' }
+      llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER }
     });
 
     service.saveHttpTool({
@@ -728,7 +846,7 @@ describe('StorageService', () => {
     await service.initialize();
     const project = await service.createProject({ id: 'tool-redirect-book', name: '重定向阻断作品', type: 'original' });
     await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
-    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' } });
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER } });
     service.saveHttpTool({ id: 'notify_tool', name: '通知工具', url: 'https://tool.example/callback', method: 'POST', enabled: true });
     service.saveAiSkills([{ id: 'http_tools', enabled: true }]);
 
@@ -766,7 +884,7 @@ describe('StorageService', () => {
     await service.initialize();
     const project = await service.createProject({ id: 'tool-limit-book', name: '响应限制作品', type: 'original' });
     await service.createEntry({ projectId: project.id, type: 'world', title: '规则', content: '基础规则。', rules: ['基础规则'] });
-    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: 'tool-key' } });
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai-compatible', baseUrl: 'https://llm.example/v1', model: 'mock-llm', apiKey: TEST_API_KEY_PLACEHOLDER } });
     service.saveHttpTool({ id: 'bad_mime_tool', name: 'MIME 工具', url: 'https://tool.example/callback', method: 'POST', enabled: true });
     service.saveHttpTool({ id: 'large_tool', name: '大响应工具', url: 'https://tool.example/large', method: 'POST', enabled: true });
     service.saveAiSkills([{ id: 'http_tools', enabled: true }]);
@@ -787,20 +905,22 @@ describe('StorageService', () => {
     const service = new StorageService(await createTempRoot(), {
       encryptionScope: scope,
       fetch: async (_input, init) => {
-        expect(String(init?.headers instanceof Headers ? init.headers.get('authorization') : (init?.headers as Record<string, string>)?.authorization)).toContain('legacy-key');
+        expect(String(init?.headers instanceof Headers ? init.headers.get('authorization') : (init?.headers as Record<string, string>)?.authorization)).toContain(TEST_LEGACY_API_KEY_PLACEHOLDER);
         return buildJsonResponse({ data: [{ id: 'legacy-model' }] });
       }
     });
     await service.initialize();
 
-    const legacyCiphertext = encryptLegacyApiKey('legacy-key', scope);
-    service.saveAiConfig({ llm: { enabled: true, provider: 'openai', baseUrl: 'https://api.example/v1', model: 'legacy-model', apiKey: 'temporary-key' } });
+    const legacyCiphertext = encryptLegacyApiKey(TEST_LEGACY_API_KEY_PLACEHOLDER, scope);
+    service.saveAiConfig({ llm: { enabled: true, provider: 'openai', baseUrl: 'https://api.example/v1', model: 'legacy-model', apiKey: TEST_TEMP_API_KEY_PLACEHOLDER } });
     const record = JSON.parse(String(service['indexDb'].getConfigRecord('ai.llm'))) as Record<string, unknown>;
     service['indexDb'].setConfigRecord('ai.llm', JSON.stringify({ ...record, encryptedApiKey: legacyCiphertext }));
 
     expect(service.getAiConfig().llm).toMatchObject({ enabled: true, apiKeySet: true, model: 'legacy-model' });
-    expect(JSON.stringify(service.getAiConfig())).not.toContain('legacy-key');
-    await expect(service.listAiModels('llm')).resolves.toEqual([{ id: 'legacy-model' }]);
+    expect(JSON.stringify(service.getAiConfig())).not.toContain(TEST_LEGACY_API_KEY_PLACEHOLDER);
+    await expect(service.listAiModels('llm')).resolves.toEqual([
+      { id: 'legacy-model', name: 'legacy-model', ownedBy: undefined, source: 'remote' }
+    ]);
 
     await service.close();
   });

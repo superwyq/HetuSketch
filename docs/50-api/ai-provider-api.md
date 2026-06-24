@@ -29,7 +29,9 @@ Embedding 与 LLM 独立配置，用于向量索引构建和向量检索。
 
 ## 安全规则
 
-- API Key 仅主进程可见。
-- 读取配置只返回 `apiKeySet`。
+- API Key 仅主进程可见，保存后以 `encryptedApiKey` 密文字段写入本机 SQLite `app_config` 表。
+- LLM 配置记录键为 `ai.llm`，Embedding 配置记录键为 `ai.embedding`。
+- 读取配置只返回 `apiKeySet`，不返回明文 `apiKey` 或 `encryptedApiKey`。
 - 请求超时由 AbortController 控制。
 - 错误信息不回显密钥。
+- 仓库内不得出现真实 API Key；测试和示例只能使用不可用占位符。

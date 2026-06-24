@@ -9,6 +9,10 @@ flowchart LR
   Storage --> Validation[validation]
   Storage --> AIRAG[ai-rag]
   Storage --> Writing[writing-studio]
+  Writing --> Plotboard[plotboard]
+  Plotboard --> Storage
+  Plotboard --> Validation
+  Plotboard --> AIRAG
 ```
 
 ## 模块清单
@@ -19,7 +23,8 @@ flowchart LR
 | 本地存储与索引 | `storage/README.md` | `src/main/services/*Service.ts`, `indexDatabase.ts`, `projectFileStore.ts` |
 | AI 与 RAG | `ai-rag/README.md` | `src/main/services/aiService.ts`, `src/shared/aiCore/*` |
 | 写作工作台 | `writing-studio/README.md` | `src/renderer/src/pages/WritingStudioPage.tsx`, `chapterService.ts` |
-| 逻辑校验 | `validation/README.md` | `storageService.ts`, `ChecksPage.tsx` |
+| 剧情画布 | `plotboard/README.md` | `src/renderer/src/pages/PlotboardPage.tsx`, `src/main/services/plotboardService.ts`, `src/main/ipc/plotboards.ts` |
+| 逻辑校验 | `validation/README.md` | `storageService.ts`, `plotboardService.ts`, `ChecksPage.tsx` |
 
 ## 模块协作原则
 
@@ -27,3 +32,4 @@ flowchart LR
 - 主进程通过 `StorageService` 聚合业务能力。
 - 文件事实源写入后同步 SQLite 索引。
 - AI/RAG 调用必须可降级，不阻断离线功能。
+- 剧情画布只保存设定/章节素材引用 ID，不复制角色、世界观或线索事实源。

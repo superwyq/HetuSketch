@@ -1,5 +1,5 @@
-import { ApiOutlined, ArrowDownOutlined, ArrowUpOutlined, BuildOutlined, DeleteOutlined, PlusOutlined, PushpinOutlined, RobotOutlined, SyncOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Checkbox, Collapse, ColorPicker, Empty, Form, Input, InputNumber, List, Segmented, Select, Slider, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
+import { ApiOutlined, ArrowDownOutlined, ArrowUpOutlined, BuildOutlined, DeleteOutlined, EditOutlined, PlusOutlined, PushpinOutlined, RobotOutlined, SyncOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Collapse, ColorPicker, Empty, Form, Input, InputNumber, List, Modal, Segmented, Select, Slider, Space, Switch, Tabs, Tag, Typography, message } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { AgentConfig, AgentSaveInput, AiConfig, AiConfigSaveInput, AiSkillConfig, AiSkillSaveInput, HttpToolConfig, HttpToolSaveInput, ModelInfo, VectorIndexState } from '@shared/storageTypes';
@@ -60,6 +60,8 @@ export function SettingsPage(): React.JSX.Element {
   const [llmModels, setLlmModels] = useState<ModelInfo[]>([]);
   const [embeddingModels, setEmbeddingModels] = useState<ModelInfo[]>([]);
   const [loadingModelsKind, setLoadingModelsKind] = useState<'llm' | 'embedding' | null>(null);
+  const [modelModal, setModelModal] = useState<{ kind: 'llm' | 'embedding'; mode: 'add' | 'edit'; model?: ModelInfo } | null>(null);
+  const [modelForm] = Form.useForm<ModelInfo>();
   // 连接测试与索引构建状态
   const [testingKind, setTestingKind] = useState<'llm' | 'embedding' | null>(null);
   const [buildingRag, setBuildingRag] = useState(false);
@@ -87,13 +89,17 @@ export function SettingsPage(): React.JSX.Element {
         if (agentList.length > 0 && !selectedAgentId) {
           setSelectedAgentId(agentList[0].id);
         }
+        setLlmModels(config.llm.customModels ?? []);
+        setEmbeddingModels(config.embedding.customModels ?? []);
         aiForm.setFieldsValue({
           llm: {
             ...config.llm,
+            customModels: config.llm.customModels ?? [],
             timeoutMs: config.llm.timeoutMs ?? 30000
           },
           embedding: {
             ...config.embedding,
+            customModels: config.embedding.customModels ?? [],
             timeoutMs: config.embedding.timeoutMs ?? 30000
           }
         });
@@ -118,7 +124,12 @@ export function SettingsPage(): React.JSX.Element {
   const saveAi = async (values: AiConfigSaveInput): Promise<void> => {
     setSaving(true);
     try {
-      const next = await window.hetuSketch.ai.saveConfig(values);
+        const payload: AiConfigSaveInput = {
+        ...values,
+        llm: values.llm ? { ...values.llm, customModels: llmModels.filter((model) => model.source === 'manual') } : undefined,
+        embedding: values.embedding ? { ...values.embedding, customModels: embeddingModels.filter((model) => model.source === 'manual') } : undefined
+      };
+      const next = await window.hetuSketch.ai.saveConfig(payload);
       setAiConfig(next);
       // 刷新全局 AI 状态（aiConfig / aiCapabilities）
       await useAppStore.getState().loadAiConfig();
@@ -268,11 +279,15 @@ export function SettingsPage(): React.JSX.Element {
   const testConnection = async (kind: 'llm' | 'embedding'): Promise<void> => {
     setTestingKind(kind);
     try {
+      const values = {
+        ...(aiForm.getFieldValue(kind) as AiConfigSaveInput['llm']),
+        customModels: (kind === 'llm' ? llmModels : embeddingModels).filter((model) => model.source === 'manual')
+      };
       const start = Date.now();
-      const result = await window.hetuSketch.ai.testConnection(kind);
+      const result = await window.hetuSketch.ai.testConnection(kind, values);
       const latency = Date.now() - start;
       if (result.ok) {
-        message.success(`连接成功，延迟 ${latency}ms`);
+        message.success(`连接成功，模型 ${result.model}，延迟 ${latency}ms`);
       } else {
         message.error(result.message);
       }
@@ -287,18 +302,71 @@ export function SettingsPage(): React.JSX.Element {
   const fetchModels = async (kind: 'llm' | 'embedding'): Promise<void> => {
     setLoadingModelsKind(kind);
     try {
-      const models = await window.hetuSketch.ai.listModels(kind);
+      const currentManualModels = (kind === 'llm' ? llmModels : embeddingModels).filter((model) => model.source === 'manual');
+      const values = {
+        ...(aiForm.getFieldValue(kind) as AiConfigSaveInput['llm']),
+        customModels: currentManualModels
+      };
+      const models = await window.hetuSketch.ai.listModels(kind, values);
       if (kind === 'llm') {
         setLlmModels(models);
       } else {
         setEmbeddingModels(models);
       }
-      message.success(`获取到 ${models.length} 个模型`);
+      aiForm.setFieldValue([kind, 'customModels'], models.filter((model) => model.source === 'manual'));
+      message.success(models.length > 0 ? `获取到 ${models.length} 个模型` : '未获取到模型，请检查供应商接口权限或手动添加');
     } catch (reason) {
       message.error(reason instanceof Error ? reason.message : '获取模型列表失败');
     } finally {
       setLoadingModelsKind(null);
     }
+  };
+
+  const openModelModal = (kind: 'llm' | 'embedding', mode: 'add' | 'edit', model?: ModelInfo): void => {
+    setModelModal({ kind, mode, model });
+    modelForm.setFieldsValue({ id: model?.id ?? '', name: model?.name ?? model?.id ?? '', ownedBy: model?.ownedBy ?? '', source: 'manual' });
+  };
+
+  const saveModelFromModal = async (): Promise<void> => {
+    if (!modelModal) return;
+    const values = await modelForm.validateFields();
+    const model: ModelInfo = {
+      id: values.id.trim(),
+      name: values.name?.trim() || values.id.trim(),
+      ownedBy: values.ownedBy?.trim() || undefined,
+      source: 'manual'
+    };
+    const current = modelModal.kind === 'llm' ? llmModels : embeddingModels;
+    if (modelModal.mode === 'add' && current.some((item) => item.id === model.id)) {
+      message.warning('模型 ID 已存在');
+      return;
+    }
+    const next = current
+      .filter((item) => item.id !== (modelModal.model?.id ?? model.id))
+      .concat(model)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    if (modelModal.kind === 'llm') {
+      setLlmModels(next);
+    } else {
+      setEmbeddingModels(next);
+    }
+    aiForm.setFieldValue([modelModal.kind, 'customModels'], next.filter((item) => item.source === 'manual'));
+    if (modelModal.mode === 'add' || aiForm.getFieldValue([modelModal.kind, 'model']) === modelModal.model?.id) {
+      aiForm.setFieldValue([modelModal.kind, 'model'], model.id);
+    }
+    setModelModal(null);
+    message.success(modelModal.mode === 'add' ? '模型已添加，请保存配置' : '模型已更新，请保存配置');
+  };
+
+  const deleteCustomModel = (kind: 'llm' | 'embedding', model: ModelInfo): void => {
+    const next = (kind === 'llm' ? llmModels : embeddingModels).filter((item) => item.id !== model.id);
+    if (kind === 'llm') {
+      setLlmModels(next);
+    } else {
+      setEmbeddingModels(next);
+    }
+    aiForm.setFieldValue([kind, 'customModels'], next.filter((item) => item.source === 'manual'));
+    message.success('模型已删除，请保存配置');
   };
 
   const buildRag = async (): Promise<void> => {
@@ -333,7 +401,7 @@ export function SettingsPage(): React.JSX.Element {
     const defaultUrl = providerDefaultUrls[currentProvider ?? 'openai-compatible'] ?? 'https://api.example.com/v1';
     const modelOptions = models.map((m) => ({
       value: m.id,
-      label: m.name ? `${m.name} (${m.id})` : m.id
+      label: m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id
     }));
 
     return (
@@ -372,18 +440,45 @@ export function SettingsPage(): React.JSX.Element {
             >
               获取模型列表
             </Button>
+            <Button icon={<PlusOutlined />} onClick={() => openModelModal(kind, 'add')}>
+              手动添加
+            </Button>
           </Space>
         </Form.Item>
+        <Form.Item name={[kind, 'customModels']} hidden />
+        {models.length > 0 && (
+          <List
+            size="small"
+            dataSource={models}
+            renderItem={(model) => (
+              <List.Item
+                actions={[
+                  <Button key="select" type="text" onClick={() => aiForm.setFieldValue([kind, 'model'], model.id)}>用于测试</Button>,
+                  <Button key="edit" type="text" icon={<EditOutlined />} onClick={() => openModelModal(kind, 'edit', model)}>编辑</Button>,
+                  <Button key="delete" type="text" danger icon={<DeleteOutlined />} disabled={model.source === 'remote'} onClick={() => deleteCustomModel(kind, model)}>删除</Button>
+                ]}
+              >
+                <List.Item.Meta
+                  title={<Space>{model.name || model.id}<Tag>{model.id}</Tag>{model.source === 'manual' && <Tag color="blue">手动</Tag>}{model.source === 'remote' && <Tag color="green">服务商</Tag>}</Space>}
+                  description={model.ownedBy ? `归属：${model.ownedBy}` : undefined}
+                />
+              </List.Item>
+            )}
+          />
+        )}
         <Form.Item name={[kind, 'timeoutMs']} label="超时 (ms)">
           <InputNumber min={1000} max={120000} step={1000} style={{ width: 200 }} />
         </Form.Item>
-        <Button
-          icon={<ThunderboltOutlined />}
-          loading={testingKind === kind}
-          onClick={() => void testConnection(kind)}
-        >
-          {testingKind === kind ? '正在测试...' : `测试${isLlm ? ' LLM' : ' Embedding'}连接`}
-        </Button>
+        <Space wrap>
+          <Typography.Text type="secondary">延迟测试模型：{aiForm.getFieldValue([kind, 'model']) || '未选择'}</Typography.Text>
+          <Button
+            icon={<ThunderboltOutlined />}
+            loading={testingKind === kind}
+            onClick={() => void testConnection(kind)}
+          >
+            {testingKind === kind ? '正在测试...' : `测试${isLlm ? ' LLM' : ' Embedding'}连接`}
+          </Button>
+        </Space>
       </>
     );
   };
@@ -691,9 +786,30 @@ export function SettingsPage(): React.JSX.Element {
   };
 
   return (
-    <Space direction="vertical" size="middle" className="page-stack">
-      {sectionContent[section] ?? renderGeneral()}
-    </Space>
+    <>
+      <Space direction="vertical" size="middle" className="page-stack">
+        {sectionContent[section] ?? renderGeneral()}
+      </Space>
+      <Modal
+        title={modelModal?.mode === 'add' ? '手动添加模型' : '编辑模型'}
+        open={!!modelModal}
+        onOk={() => void saveModelFromModal()}
+        onCancel={() => setModelModal(null)}
+        destroyOnClose
+      >
+        <Form form={modelForm} layout="vertical" preserve={false}>
+          <Form.Item name="id" label="模型 ID" rules={[{ required: true, message: '请输入模型 ID' }]}>
+            <Input disabled={modelModal?.mode === 'edit'} maxLength={200} placeholder="例如 gpt-4o-mini" />
+          </Form.Item>
+          <Form.Item name="name" label="显示名称" tooltip="仅影响界面展示，不改变服务商模型 ID">
+            <Input maxLength={200} placeholder="例如 GPT-4o Mini" />
+          </Form.Item>
+          <Form.Item name="ownedBy" label="归属/分组">
+            <Input maxLength={120} placeholder="例如 openai、custom" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
   );
 }
 

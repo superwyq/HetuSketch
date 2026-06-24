@@ -31,7 +31,14 @@ import type {
   InspirationTypeDefinition,
   HttpToolSaveInput,
   IndexSyncSummary,
+  GeneratedMarkdownWriteInput,
+  GeneratedMarkdownWriteResult,
   ModelInfo,
+  Plotboard,
+  PlotboardGenerationRequest,
+  PlotboardGenerationResult,
+  PlotboardValidationRequest,
+  PlotboardValidationResult,
   ProjectCreateInput,
   ProjectEntry,
   ProjectExportResult,
@@ -49,6 +56,9 @@ import type {
   SettingSetCreateInput,
   SettingSetManifest,
   SettingSetUpdateInput,
+  StateDiffSettlementInput,
+  StateDiffSettlementResult,
+  StateSnapshot,
   VectorIndexState,
   SettingCompletionResult,
   VolumeCreateInput,
@@ -87,6 +97,20 @@ export const IPC_CHANNELS = {
   chaptersDeleteVolume: 'chapters:delete-volume',
   chaptersSelectExportFolder: 'chapters:select-export-folder',
   chaptersExport: 'chapters:export',
+  plotboardsCreate: 'plotboards:create',
+  plotboardsOpen: 'plotboards:open',
+  plotboardsSave: 'plotboards:save',
+  plotboardsSaveSnapshot: 'plotboards:snapshot:save',
+  plotboardsLoadSnapshot: 'plotboards:snapshot:load',
+  plotboardsSyncIndex: 'plotboards:index:sync',
+  plotboardsExportOutline: 'plotboards:outline:export',
+  plotboardsSaveChapterSnapshot: 'plotboards:chapter-snapshot:save',
+  plotboardsWriteGeneratedMarkdown: 'plotboards:generated-markdown:write',
+  plotboardsBuildAiContext: 'plotboards:ai-context:build',
+  plotboardsGenerate: 'plotboards:generate',
+  plotboardsStreamGenerate: 'plotboards:generate:stream',
+  plotboardsSettleDiffs: 'plotboards:diffs:settle',
+  plotboardsValidate: 'plotboards:validate',
   projectsList: 'projects:list',
   projectsGet: 'projects:get',
   projectsCreate: 'projects:create',
@@ -216,6 +240,22 @@ export interface HetuSketchApi {
     selectExportFolder: () => Promise<string | undefined>;
     export: (input: ChapterExportInput) => Promise<ChapterExportResult>;
   };
+  plotboards: {
+    create: (input: { bookId: string; chapterId: string; projectId?: string; settingSetId?: string }) => Promise<Plotboard>;
+    open: (bookId: string, chapterId: string) => Promise<Plotboard>;
+    save: (plotboard: Plotboard) => Promise<Plotboard>;
+    saveSnapshot: (bookId: string, snapshot: StateSnapshot) => Promise<StateSnapshot>;
+    loadSnapshot: (bookId: string, chapterId: string) => Promise<StateSnapshot>;
+    syncIndex: (bookId: string) => Promise<IndexSyncSummary>;
+    exportOutline: (bookId: string, chapterId: string) => Promise<string>;
+    saveChapterSnapshot: (bookId: string, chapterId: string) => Promise<{ snapshotId: string; filePath: string; createdAt: string }>;
+    writeGeneratedMarkdown: (input: GeneratedMarkdownWriteInput) => Promise<GeneratedMarkdownWriteResult>;
+    buildAiContext: (request: PlotboardGenerationRequest) => Promise<PlotboardGenerationResult['context']>;
+    generate: (request: PlotboardGenerationRequest) => Promise<PlotboardGenerationResult>;
+    streamGenerate: (request: PlotboardGenerationRequest, onChunk: (chunk: AiStreamChunk) => void) => Promise<PlotboardGenerationResult>;
+    settleDiffs: (input: StateDiffSettlementInput) => Promise<StateDiffSettlementResult>;
+    validate: (input: PlotboardValidationRequest) => Promise<PlotboardValidationResult>;
+  };
   projects: {
     list: () => Promise<ProjectManifest[]>;
     get: (projectId: string) => Promise<ProjectManifest>;
@@ -246,7 +286,7 @@ export interface HetuSketchApi {
   ai: {
     getConfig: () => Promise<AiConfig>;
     saveConfig: (input: AiConfigSaveInput) => Promise<AiConfig>;
-    testConnection: (kind: 'llm' | 'embedding') => Promise<{ ok: boolean; message: string; provider?: string; model?: string }>;
+    testConnection: (kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']) => Promise<{ ok: boolean; message: string; provider?: string; model?: string }>;
     getPrompts: () => Promise<AiPromptConfig>;
     savePrompts: (input: AiPromptSaveInput) => Promise<AiPromptConfig>;
     listSkills: () => Promise<AiSkillConfig[]>;
@@ -256,7 +296,7 @@ export interface HetuSketchApi {
     deleteHttpTool: (toolId: string) => Promise<void>;
     completeSetting: (request: SettingCompletionRequest) => Promise<AiAgentResponse<SettingCompletionResult>>;
     foreshadowing: (projectId: string, text: string, requestId?: string) => Promise<AiAgentResponse<{ reminders: ValidationFinding[] }>>;
-    listModels: (kind: 'llm' | 'embedding') => Promise<ModelInfo[]>;
+    listModels: (kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']) => Promise<ModelInfo[]>;
     streamValidation: (request: AiValidationRequest, basic: ValidationResult, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;
     streamRagAnswer: (request: RagQueryRequest, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;
     streamCompleteSetting: (request: SettingCompletionRequest, onChunk: (chunk: AiStreamChunk) => void) => Promise<void>;

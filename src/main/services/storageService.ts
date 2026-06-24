@@ -34,8 +34,13 @@ import type {
   HttpToolConfig,
   HttpToolSaveInput,
   IndexSyncSummary,
+  GeneratedMarkdownWriteInput,
+  GeneratedMarkdownWriteResult,
+  PlotboardGenerationRequest,
+  PlotboardValidationRequest,
   InspirationTypeDefinition,
   ModelInfo,
+  Plotboard,
   PlotEntry,
   ProjectCreateInput,
   ProjectEntry,
@@ -55,6 +60,8 @@ import type {
   SettingSetCreateInput,
   SettingSetManifest,
   SettingSetUpdateInput,
+  StateDiffSettlementInput,
+  StateSnapshot,
   ValidationFinding,
   VolumeCreateInput,
   VolumeNode,
@@ -69,6 +76,7 @@ import { ChapterService } from './chapterService.js';
 import { IndexDatabase } from './indexDatabase.js';
 import { IndexService } from './indexService.js';
 import { InspirationTypeService } from './inspirationTypeService.js';
+import { PlotboardService } from './plotboardService.js';
 import { getFileStats, ProjectFileStore } from './projectFileStore.js';
 import { SettingSetService } from './settingSetService.js';
 import {
@@ -88,6 +96,7 @@ export class StorageService {
   private readonly settingSetService: SettingSetService;
   private readonly bookService: BookService;
   private readonly chapterService: ChapterService;
+  private readonly plotboardService: PlotboardService;
   private readonly inspirationTypeService: InspirationTypeService;
 
   constructor(baseDataPath?: string, aiOptions?: AiServiceOptions) {
@@ -99,6 +108,7 @@ export class StorageService {
     this.settingSetService = new SettingSetService(this.paths);
     this.bookService = new BookService(this.paths);
     this.chapterService = new ChapterService(this.bookService, this.paths);
+    this.plotboardService = new PlotboardService(this.paths, this.chapterService, this.aiService, (projectId, type, entryId) => this.readEntry(projectId, type, entryId, false));
     this.inspirationTypeService = new InspirationTypeService(this.paths);
   }
 
@@ -194,6 +204,69 @@ export class StorageService {
     return this.chapterService.deleteVolume(bookId, volumeId);
   }
 
+  async createPlotboard(input: { bookId: string; chapterId: string; projectId?: string; settingSetId?: string }): Promise<Plotboard> {
+    const plotboard = await this.plotboardService.createPlotboard(input);
+    await this.indexService.scanBook(input.bookId);
+    return plotboard;
+  }
+
+  openPlotboard(bookId: string, chapterId: string): Promise<Plotboard> {
+    return this.plotboardService.loadPlotboard(bookId, chapterId);
+  }
+
+  async savePlotboard(plotboard: Plotboard): Promise<Plotboard> {
+    const saved = await this.plotboardService.savePlotboard(plotboard);
+    await this.indexService.scanBook(saved.bookId);
+    return saved;
+  }
+
+  loadStateSnapshot(bookId: string, chapterId: string): Promise<StateSnapshot> {
+    return this.plotboardService.loadStateSnapshot(bookId, chapterId);
+  }
+
+  async saveStateSnapshot(bookId: string, snapshot: StateSnapshot): Promise<StateSnapshot> {
+    const saved = await this.plotboardService.saveStateSnapshot(bookId, snapshot);
+    await this.indexService.scanBook(bookId);
+    return saved;
+  }
+
+  async syncPlotboardIndex(bookId: string): Promise<IndexSyncSummary> {
+    return this.indexService.scanBook(bookId);
+  }
+
+  async exportPlotboardOutline(bookId: string, chapterId: string): Promise<string> {
+    const plotboard = await this.openPlotboard(bookId, chapterId);
+    return this.plotboardService.exportMarkdownOutline(plotboard);
+  }
+
+  async saveChapterBodySnapshot(bookId: string, chapterId: string) {
+    return this.plotboardService.saveChapterBodySnapshot(bookId, chapterId);
+  }
+
+  writeGeneratedMarkdown(input: GeneratedMarkdownWriteInput): Promise<GeneratedMarkdownWriteResult> {
+    return this.plotboardService.writeGeneratedMarkdown(input);
+  }
+
+  buildPlotboardAiContext(input: PlotboardGenerationRequest) {
+    return this.plotboardService.buildAiContext(input);
+  }
+
+  generatePlotboardMarkdown(input: PlotboardGenerationRequest) {
+    return this.plotboardService.generate(input);
+  }
+
+  streamPlotboardGeneration(input: PlotboardGenerationRequest) {
+    return this.plotboardService.streamGenerate(input);
+  }
+
+  settlePlotboardDiffs(input: StateDiffSettlementInput) {
+    return this.plotboardService.settleStateDiffs(input);
+  }
+
+  validatePlotboard(input: PlotboardValidationRequest) {
+    return this.plotboardService.validatePlotboard(input);
+  }
+
   async createProject(input: ProjectCreateInput): Promise<ProjectManifest> {
     assertProjectCreateInput(input);
     const project = await this.fileStore.createProject(input);
@@ -270,7 +343,10 @@ export class StorageService {
     return entry;
   }
 
-  listEntries(query: EntryListQuery): SearchResultItem[] {
+  async listEntries(query: EntryListQuery): Promise<SearchResultItem[]> {
+    if (query.projectId) {
+      await this.indexService.scanProject(query.projectId);
+    }
     return this.indexDb.listEntrySummaries(query);
   }
 
@@ -379,8 +455,8 @@ export class StorageService {
   deleteAgent(id: string): void { return this.aiService.deleteAgent(id); }
   reorderAgents(input: AgentReorderInput[]): AgentConfig[] { return this.aiService.reorderAgents(input); }
 
-  testAiConnection(kind: 'llm' | 'embedding'): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
-    return this.aiService.testConnection(kind);
+  testAiConnection(kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']): Promise<{ ok: boolean; message: string; provider?: string; model?: string }> {
+    return this.aiService.testConnection(kind, input);
   }
 
   buildVectorIndex(projectId: string): Promise<RagBuildResult> {
@@ -412,8 +488,8 @@ export class StorageService {
     return this.aiService.ragAnswer(request);
   }
 
-  listAiModels(kind: 'llm' | 'embedding'): Promise<ModelInfo[]> {
-    return this.aiService.listModels(kind);
+  listAiModels(kind: 'llm' | 'embedding', input?: AiConfigSaveInput['llm']): Promise<ModelInfo[]> {
+    return this.aiService.listModels(kind, input);
   }
 
   streamValidation(request: AiValidationRequest, basic: ValidationResult): AsyncGenerator<AiStreamChunk> {

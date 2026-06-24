@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, CloseOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
+import { BranchesOutlined, CheckCircleOutlined, CloseOutlined, DeleteOutlined, EditOutlined, EyeOutlined, FileAddOutlined, FolderAddOutlined, RobotOutlined, SaveOutlined, SearchOutlined } from '@ant-design/icons';
 import { Alert, Button, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Spin, Tabs, Tag, message } from 'antd';
 import type { GetRef, InputRef } from 'antd';
 import type { ValidationFinding } from '@shared/storageTypes';
@@ -27,6 +27,7 @@ const statusOptions: Array<{ value: ChapterStatus; label: string }> = [
 
 export function WritingStudioPage(): React.JSX.Element {
   const location = useLocation();
+  const navigate = useNavigate();
   const selectedProject = useAppStore((state) => state.selectedProject);
   const refreshSidebar = useAppStore((state) => state.refreshSidebar);
   const [volumeForm] = Form.useForm<{ name: string }>();
@@ -246,6 +247,9 @@ export function WritingStudioPage(): React.JSX.Element {
               <Button size="small" icon={<FolderAddOutlined />} onClick={createVolumeInline}>新建分卷</Button>
               <Button size="small" type="primary" icon={<FileAddOutlined />} onClick={createChapterInline}>新建章节</Button>
               <Button size="small" icon={mode === 'edit' ? <EyeOutlined /> : <EditOutlined />} onClick={toggleMarkdownMode}>{mode === 'edit' ? '预览' : '编辑'}</Button>
+              {activeChapter.kind === 'chapter' && (
+                <Button size="small" icon={<BranchesOutlined />} onClick={() => navigate(`/workspace/plotboard?chapter=${encodeURIComponent(activeChapter.id)}`)}>剧情画布</Button>
+              )}
               <Input size="small" prefix={<SearchOutlined />} value={findText} onChange={(event) => setFindText(event.target.value)} placeholder="查找" className="find-input" />
               <Input size="small" value={replaceText} onChange={(event) => setReplaceText(event.target.value)} placeholder="替换为" className="find-input" />
               <Button size="small" onClick={replaceCurrent}>替换当前</Button>

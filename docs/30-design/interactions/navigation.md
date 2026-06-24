@@ -21,6 +21,15 @@
 - 世界观进入 `/data/worlds?entry=<id>`。
 - 伏笔进入 `/data/plots?entry=<id>` 或按状态筛选。
 
+## 剧情画布导航
+
+- 从写作工作台选中章节后点击“剧情画布”，进入 `/workspace/plotboard?chapter=<chapterId>`。
+- 剧情画布加载时先调用 `plotboards.open(bookId, chapterId)`，不存在时调用 `plotboards.create(...)`。
+- 剧情画布工具栏“返回章节”回到 `/workspace/editor?chapter=<chapterId>`。
+- 校验面板 finding 点击后将视口移动到目标剧情卡，并临时高亮。
+- 多 POV 状态轴中的卡片按钮可跳转到对应剧情卡。
+- 已生成正文时，校验结果可展示 Markdown 段落编号和摘要；当前 UI 仍以卡片回跳为主。
+
 ## 快捷键
 
 | 快捷键 | 功能 |
@@ -29,3 +38,7 @@
 | `Ctrl+J` | 切换底部面板 |
 | `Ctrl+\\` | 切换编辑器分割模式 |
 | `Ctrl+Shift+H` | 切换悬浮速查窗 |
+| `Ctrl+S` | 在剧情画布保存当前画布 |
+| `Ctrl+Z` | 在剧情画布撤销 |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | 在剧情画布重做 |
+| `Delete` / `Backspace` | 在剧情画布删除选中卡片或连线（输入框聚焦时不触发） |

@@ -7,10 +7,11 @@ type StreamListener<TChunk> = (event: IpcRendererEvent, chunk: TChunk) => void;
 interface StreamInvokerOptions<TChunk> {
   channel: string;
   onChunk: (chunk: TChunk) => void;
+  onEnd?: (payload: unknown) => void;
   send: (requestId: string) => void;
 }
 
-export function createStreamInvoker<TChunk>({ channel, onChunk, send }: StreamInvokerOptions<TChunk>): Promise<void> {
+export function createStreamInvoker<TChunk>({ channel, onChunk, onEnd, send }: StreamInvokerOptions<TChunk>): Promise<void> {
   const requestId = crypto.randomUUID();
   const streamChannel = (suffix: 'chunk' | 'end' | 'error'): string => `${channel}:${suffix}:${requestId}`;
 
@@ -20,7 +21,8 @@ export function createStreamInvoker<TChunk>({ channel, onChunk, send }: StreamIn
     const errorChannel = streamChannel('error');
 
     const chunkListener: StreamListener<TChunk> = (_event, chunk) => onChunk(chunk);
-    const endListener = (): void => {
+    const endListener = (_event: IpcRendererEvent, payload: unknown): void => {
+      onEnd?.(payload);
       cleanup();
       resolve();
     };
@@ -85,6 +87,30 @@ const api: HetuSketchApi = {
     selectExportFolder: () => ipcRenderer.invoke(IPC_CHANNELS.chaptersSelectExportFolder),
     export: (input) => ipcRenderer.invoke(IPC_CHANNELS.chaptersExport, input)
   },
+  plotboards: {
+    create: (input) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsCreate, input),
+    open: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsOpen, bookId, chapterId),
+    save: (plotboard) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsSave, plotboard),
+    saveSnapshot: (bookId, snapshot) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsSaveSnapshot, bookId, snapshot),
+    loadSnapshot: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsLoadSnapshot, bookId, chapterId),
+    syncIndex: (bookId) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsSyncIndex, bookId),
+    exportOutline: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsExportOutline, bookId, chapterId),
+    saveChapterSnapshot: (bookId, chapterId) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsSaveChapterSnapshot, bookId, chapterId),
+    writeGeneratedMarkdown: (input) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsWriteGeneratedMarkdown, input),
+    buildAiContext: (request) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsBuildAiContext, request),
+    generate: (request) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsGenerate, request),
+    streamGenerate: (request, onChunk) => {
+      let finalResult: unknown;
+      return createStreamInvoker({
+        channel: IPC_CHANNELS.plotboardsStreamGenerate,
+        onChunk,
+        onEnd: (payload) => { finalResult = payload; },
+        send: (requestId) => ipcRenderer.send(IPC_CHANNELS.plotboardsStreamGenerate, withPreloadRequestId(request, requestId))
+      }).then(() => finalResult as Awaited<ReturnType<HetuSketchApi['plotboards']['streamGenerate']>>);
+    },
+    settleDiffs: (input) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsSettleDiffs, input),
+    validate: (input) => ipcRenderer.invoke(IPC_CHANNELS.plotboardsValidate, input)
+  },
   projects: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.projectsList),
     get: (projectId: string) => ipcRenderer.invoke(IPC_CHANNELS.projectsGet, projectId),
@@ -115,7 +141,7 @@ const api: HetuSketchApi = {
   ai: {
     getConfig: () => ipcRenderer.invoke(IPC_CHANNELS.aiConfigGet),
     saveConfig: (input) => ipcRenderer.invoke(IPC_CHANNELS.aiConfigSave, input),
-    testConnection: (kind) => ipcRenderer.invoke(IPC_CHANNELS.aiConnectionTest, kind),
+    testConnection: (kind, input) => ipcRenderer.invoke(IPC_CHANNELS.aiConnectionTest, kind, input),
     getPrompts: () => ipcRenderer.invoke(IPC_CHANNELS.aiPromptsGet),
     savePrompts: (input) => ipcRenderer.invoke(IPC_CHANNELS.aiPromptsSave, input),
     listSkills: () => ipcRenderer.invoke(IPC_CHANNELS.aiSkillsList),
@@ -125,7 +151,7 @@ const api: HetuSketchApi = {
     deleteHttpTool: (toolId) => ipcRenderer.invoke(IPC_CHANNELS.aiHttpToolsDelete, toolId),
     completeSetting: (request) => ipcRenderer.invoke(IPC_CHANNELS.aiSettingComplete, request),
     foreshadowing: (projectId, text, requestId) => ipcRenderer.invoke(IPC_CHANNELS.aiForeshadowing, projectId, text, requestId),
-    listModels: (kind) => ipcRenderer.invoke(IPC_CHANNELS.aiModelsList, kind),
+    listModels: (kind, input) => ipcRenderer.invoke(IPC_CHANNELS.aiModelsList, kind, input),
     streamValidation: (request, _basic, onChunk) =>
       createStreamInvoker({
         channel: IPC_CHANNELS.aiStreamValidation,
